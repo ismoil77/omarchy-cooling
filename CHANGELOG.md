@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1
+
+- Security (marketplace review), helper 5: the root helper sets its own `umask 022` and `PATH`; its
+  state folder `/run/ismoil-fans` must be a real folder owned by root and writable by nobody else, or it
+  is removed and made anew, its contents untrusted; links in place of its files are dropped, never
+  followed. The saved state holds driver names and numbers only, never a path.
+  Installed an older helper? Run `helper/install.sh` once to replace it.
+
 ## 1.3.0 — audit
 
 - The popup is built the first time it opens, not at shell start on every monitor.

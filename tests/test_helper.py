@@ -13,7 +13,7 @@ class Helper(unittest.TestCase):
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root)
         self.sys, self.proc, self.run_dir = (os.path.join(self.root, n) for n in ("sys", "proc", "run/ismoil-fans"))
-        os.makedirs(self.sys); os.makedirs(self.proc)
+        os.makedirs(self.sys); os.makedirs(self.proc); os.makedirs(os.path.dirname(self.run_dir))
         src = open(HELPER).read()
         src = src.replace("SYS=/sys", "SYS=" + self.sys).replace("PROC=/proc", "PROC=" + self.proc).replace("RUN=/run/ismoil-fans", "RUN=" + self.run_dir)
         self.helper = os.path.join(self.root, "helper")
@@ -93,6 +93,44 @@ class Helper(unittest.TestCase):
         p = self.call("max")
         self.assertEqual(p.returncode, 1)
         self.assertFalse(self.marker())
+
+    def test_state_is_private_whatever_the_callers_mask(self):
+        self.put("sys/class/hwmon/hwmon5/name", "hp\n"); self.put("sys/class/hwmon/hwmon5/pwm1_enable", "2\n")
+        old = os.umask(0)
+        try:
+            self.call("max")
+        finally:
+            os.umask(old)
+        self.assertEqual(os.stat(self.run_dir).st_mode & 0o777, 0o755)
+        for name in ("saved", "max"):
+            self.assertEqual(os.stat(os.path.join(self.run_dir, name)).st_mode & 0o777, 0o644, name)
+
+    def test_a_state_folder_someone_else_could_write_is_not_trusted(self):
+        """A planted "saved" must never be replayed: the folder is wiped first."""
+        self.put("sys/class/hwmon/hwmon5/name", "hp\n"); self.put("sys/class/hwmon/hwmon5/pwm1_enable", "0\n")
+        self.put("sys/class/hwmon/hwmon9/name", "victim\n"); self.put("sys/class/hwmon/hwmon9/pwm1_enable", "2\n")
+        os.makedirs(self.run_dir)
+        with open(os.path.join(self.run_dir, "saved"), "w") as f:
+            f.write("victim 1 7 99\n")
+        os.chmod(self.run_dir, 0o777)
+        self.call("auto")
+        self.assertEqual(self.get("sys/class/hwmon/hwmon9/pwm1_enable"), "2", "the planted line was not replayed")
+        self.assertEqual(os.stat(self.run_dir).st_mode & 0o777, 0o755)
+
+    def test_a_link_in_place_of_the_state_is_removed_not_followed(self):
+        self.put("sys/class/hwmon/hwmon5/name", "hp\n"); self.put("sys/class/hwmon/hwmon5/pwm1_enable", "2\n")
+        outside = os.path.join(self.root, "outside"); os.makedirs(outside)
+        target = os.path.join(outside, "precious"); open(target, "w").write("keep\n")
+        os.makedirs(os.path.dirname(self.run_dir), exist_ok=True)
+        os.symlink(outside, self.run_dir)
+        self.call("max")
+        self.assertFalse(os.path.islink(self.run_dir))
+        self.assertEqual(os.listdir(outside), ["precious"])
+        # A link planted inside the real folder afterwards is dropped too.
+        os.remove(os.path.join(self.run_dir, "saved"))
+        os.symlink(target, os.path.join(self.run_dir, "saved"))
+        self.call("max")
+        self.assertEqual(open(target).read(), "keep\n")
 
     def test_only_two_words(self):
         for args in ([], ["MAX"], ["max", "x"][1:], ["../../etc"]):

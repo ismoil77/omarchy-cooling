@@ -2,7 +2,7 @@
 # Root helper of the Cooling widget: fans at full speed, or back to how they were.
 # It takes no path and no number from its caller, only one of two words.
 #   ismoil-fans-max max | auto
-# helper-version: 4
+# helper-version: 5
 #
 # Backends, found on this machine at each run:
 #   hwmon     pwmN_enable = 0 where the driver documents it as "full speed" (hp-wmi,
@@ -11,8 +11,14 @@
 #             before are saved and put back on auto. GPU drivers are left alone.
 #   thinkpad  /proc/acpi/ibm/fan "level full-speed" / "level auto" (needs fan_control=1)
 #   msi-ec    cooler_boost on / off
-# /run/ismoil-fans/max (readable by anyone) says Max is on and with what.
+# /run/ismoil-fans/max (readable by anyone) says Max is on.
+# /run/ismoil-fans/saved holds, per fan, the driver's name, the fan's number
+# and two numbers to put back. No path is ever taken from it: the folder is
+# found again by the driver's name, and only its pwmN / pwmN_enable are written.
 set -u
+# Nothing is inherited from the caller: not its file mask, not its PATH.
+umask 022
+PATH=/usr/bin:/bin
 SYS=/sys
 PROC=/proc
 RUN=/run/ismoil-fans
@@ -23,7 +29,21 @@ case "${1:-}" in
   *) echo "usage: ismoil-fans-max max|auto" >&2; exit 2 ;;
 esac
 
-mkdir -p "$RUN" && chmod 0755 "$RUN"
+# The state folder is this helper's alone: a real folder, owned by the user it
+# runs as (root), writable by nobody else. Anything else there was not made by
+# this helper and is not trusted: it is removed, never read or written through.
+if [ -L "$RUN" ] || { [ -e "$RUN" ] && [ ! -d "$RUN" ]; }; then
+  rm -f "$RUN"
+elif [ -d "$RUN" ]; then
+  if [ "$(stat -c %u "$RUN")" != "$(id -u)" ] || [ -n "$(find "$RUN" -maxdepth 0 -perm /022)" ]; then
+    rm -rf "$RUN"
+  fi
+fi
+[ -d "$RUN" ] || mkdir -m 0755 "$RUN" || exit 1
+# Inside it, only plain files count (a link or anything else is dropped).
+for f in "$RUN/saved" "$RUN/saved.tmp" "$RUN/max"; do
+  if [ -L "$f" ] || { [ -e "$f" ] && [ ! -f "$f" ]; }; then rm -rf "$f"; fi
+done
 done_any=0
 
 # Drivers where pwmN_enable = 0 is documented as "no control, full speed".

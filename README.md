@@ -48,9 +48,10 @@ The widget runs `helper/install.sh` itself the first time Max is clicked, or whe
 fails. An installed helper is kept as it is: an update of the widget never asks for your password
 again; run `helper/install.sh` yourself to get a newer helper. It puts in place, and `helper/install.sh remove` takes out:
 
-- `/usr/local/libexec/ismoil-fans-max` — takes one word, `max` or `auto`, nothing else; saves the fan
-  settings it changes in `/run/ismoil-fans` and puts them back; `/run/ismoil-fans/max` tells the widget
-  Max is on;
+- `/usr/local/libexec/ismoil-fans-max` — takes one word, `max` or `auto`, nothing else. It sets its own
+  file mask and `PATH`, keeps what it changed in `/run/ismoil-fans` (driver names and numbers, never a
+  path; a folder that is not root's alone, or a link in its place, is removed and not trusted) and puts
+  it back; `/run/ismoil-fans/max` tells the widget Max is on;
 - a polkit action for it, and a rule letting administrators (`wheel`) run this one helper without a
   password: the shell runs in the user's systemd manager, outside the login session, where polkit has
   no agent to ask one (so the rule cannot require an active local session either);
