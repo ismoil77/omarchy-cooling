@@ -58,6 +58,22 @@ class Helper(unittest.TestCase):
         self.call("auto")
         self.assertEqual([self.get("sys/class/hwmon/hwmon3/pwm%d_enable" % i) for i in (1, 2)], ["5", "2"])
 
+    def test_a_driver_where_zero_may_mean_off_gets_manual_at_full(self):
+        """pwm-fan: pwm1_enable = 0 turns the fan OFF. It gets manual mode at 255, and both come back."""
+        self.put("sys/class/hwmon/hwmon2/name", "pwmfan\n")
+        self.put("sys/class/hwmon/hwmon2/pwm1_enable", "2\n"); self.put("sys/class/hwmon/hwmon2/pwm1", "90\n")
+        self.assertEqual(self.call("max").returncode, 0)
+        self.assertEqual((self.get("sys/class/hwmon/hwmon2/pwm1_enable"), self.get("sys/class/hwmon/hwmon2/pwm1")), ("1", "255"))
+        self.call("auto")
+        self.assertEqual((self.get("sys/class/hwmon/hwmon2/pwm1_enable"), self.get("sys/class/hwmon/hwmon2/pwm1")), ("2", "90"))
+
+    def test_settings_come_back_after_the_hwmon_number_changed(self):
+        self.put("sys/class/hwmon/hwmon3/name", "nct6798\n"); self.put("sys/class/hwmon/hwmon3/pwm2_enable", "5\n")
+        self.call("max")
+        os.rename(os.path.join(self.sys, "class/hwmon/hwmon3"), os.path.join(self.sys, "class/hwmon/hwmon7"))
+        self.call("auto")
+        self.assertEqual(self.get("sys/class/hwmon/hwmon7/pwm2_enable"), "5")
+
     def test_after_a_reboot_auto_only_touches_known_drivers(self):
         self.put("sys/class/hwmon/hwmon5/name", "hp\n"); self.put("sys/class/hwmon/hwmon5/pwm1_enable", "0\n")
         self.put("sys/class/hwmon/hwmon3/name", "nct6798\n"); self.put("sys/class/hwmon/hwmon3/pwm1_enable", "0\n")

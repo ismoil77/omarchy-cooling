@@ -24,7 +24,8 @@ and a popup with every fan the kernel reports and its speed, temperatures by gro
 
     | Hardware | How | Back to automatic |
     |---|---|---|
-    | most laptops and boards (hp-wmi, asus-wmi, dell-smm, nct6775, it87 …) | hwmon `pwmN_enable = 0`, "no control, full speed" in the kernel's hwmon ABI | the values from before are put back exactly |
+    | hp-wmi, asus-wmi, nct67xx, it87, f718xx, w836xx | hwmon `pwmN_enable = 0`, documented by these drivers as "no control, full speed" | the values from before are put back exactly |
+    | any other hwmon fan (dell-smm, pwm-fan …) | manual mode at 255 (`0` can mean "off" there) | mode and value from before are put back |
     | ThinkPad (`thinkpad_acpi fan_control=1`) | `/proc/acpi/ibm/fan` `level full-speed` | `level auto` |
     | MSI (`msi-ec`) | `cooler_boost on` | `off` |
 
@@ -35,20 +36,24 @@ and a popup with every fan the kernel reports and its speed, temperatures by gro
 
 ## Light on the system
 
-`discover.py` finds the sensors once (and when the popup opens); after that the sensor files are
-re-read in place every `interval` seconds, with no process.
+`discover.py` finds the sensors once (and when the popup opens); after that sensor files are re-read in
+place every `interval` seconds, with no process. While the popup is closed only the processor's
+sensors are read (plus the load and the mode in force while Auto decides); fans, SSD and board wait for
+the popup, which is built the first time it opens. In Auto the widget runs `powerprofilesctl set` when
+it changes the mode, and nothing else.
 
 ## The Max helper (optional)
 
-The widget runs `helper/install.sh` itself the first time Max is clicked (and when the installed
-helper is older than it needs). It puts in place, and `helper/install.sh remove` takes out:
+The widget runs `helper/install.sh` itself the first time Max is clicked, or when the installed helper
+fails. An installed helper is kept as it is: an update of the widget never asks for your password
+again; run `helper/install.sh` yourself to get a newer helper. It puts in place, and `helper/install.sh remove` takes out:
 
 - `/usr/local/libexec/ismoil-fans-max` — takes one word, `max` or `auto`, nothing else; saves the fan
   settings it changes in `/run/ismoil-fans` and puts them back; `/run/ismoil-fans/max` tells the widget
   Max is on;
 - a polkit action for it, and a rule letting administrators (`wheel`) run this one helper without a
   password: the shell runs in the user's systemd manager, outside the login session, where polkit has
-  no agent to ask one;
+  no agent to ask one (so the rule cannot require an active local session either);
 - `ismoil-fans-auto.service`, which sets known fans (hp, asus, ThinkPad, MSI) back to automatic at boot.
 
 ## Install
@@ -61,16 +66,20 @@ Update with `omarchy plugin update ismoil.fans`.
 
 ## Remove
 
+If you ever clicked Max, take its root helper out **first** (the script goes away with the plugin):
+
 ```bash
+~/.config/omarchy/plugins/ismoil.fans/helper/install.sh remove
 omarchy plugin remove ismoil.fans
 ```
 
-Nothing is left behind.
+Without Max nothing else is left behind.
 
 ## Settings
 
 | Setting | Default | |
 |---|---|---|
+| `mode` | auto | `auto`: the widget switches the power profile itself, quiet at rest and medium at work; `manual`: the mode you click stays. Clicking a mode sets this. |
 | `interval` | 3 | seconds between reads |
 | `language` | auto | `en`, `ru`, or the system locale |
 | `textSize` | Normal | Normal, Large, Extra large |

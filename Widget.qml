@@ -5,15 +5,17 @@ import qs.Commons
 import qs.Ui
 import "kit" as Kit
 import "Model.js" as Model
+import "kit/I18n.js" as I18n
 
 // Cooling widget: the processor's temperature in the bar, coloured as it
 // heats; the popup lists every fan with its speed, the temperatures by group
 // (processor, graphics, SSD, board) and the power mode (power-profiles-daemon,
 // no root). Works with whatever hwmon reports; says so when there is no fan.
 //
-// Cost: discover.py runs once (and when the popup opens); then the sensor
-// files are re-read in place every `interval` seconds, no process. A discrete
-// GPU is read only while the popup is open, and never woken up from sleep.
+// Cost: discover.py runs once (and when the popup opens); then sensor files
+// are re-read in place every `interval` seconds, no process: closed, only the
+// processor's. A discrete GPU is read only while the popup is open, and never
+// woken up from sleep. Auto runs powerprofilesctl only when it changes the mode.
 //
 //   left click   - open/close the popup
 //   right click  - next power mode
@@ -37,6 +39,9 @@ Panel {
 
   // ---------- state ----------
   property var found: null
+  property string foundRaw: ""
+  // The first poll reads everything once, so the state is true from the start.
+  property bool polledOnce: false
   property var fanValues: []
   property var tempValues: []
   property var peaks: ({})
@@ -52,6 +57,9 @@ Panel {
   // Auto changes the mode only after its reason held for 20 s.
   property string pending: ""
   property real pendingSince: 0
+  // Each bar (one per monitor) waits a little differently, so the second one
+  // sees the first one's switch instead of repeating it.
+  readonly property int autoHold: 20000 + Math.round(Math.random() * 6000)
   // Any installed helper is used: a newer widget never asks for the password
   // again just because the helper got a new version. Only a missing helper,
   // or one that just failed (`helperFailed` holds its text until the file
@@ -107,8 +115,10 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        // Same answer as before: keep the sensor files as they are.
+        if (text === root.foundRaw) return
         var d = Model.parseDiscovery(text)
-        if (d) { root.found = d; root.readProfiles(); Qt.callLater(root.poll) }
+        if (d) { root.foundRaw = text; root.found = d; root.readProfiles(); Qt.callLater(root.poll) }
       }
     }
   }
@@ -134,38 +144,48 @@ Panel {
   FileView { id: helperFile; path: "/usr/local/libexec/ismoil-fans-max"; blockLoading: true; printErrors: false }
   FileView { id: onlineFile; path: "/sys/devices/system/cpu/online"; blockLoading: true; onLoaded: root.cpus = Model.cpuCount(text()) }
 
-  function readAll(inst) {
+  // Re-reads the files `wanted(i)` picks; the others keep their last value.
+  function readSome(inst, last, wanted) {
     var out = []
     for (var i = 0; i < inst.count; i++) {
       var f = inst.objectAt(i)
-      if (!f) { out.push(null); continue }
+      if (!f || !wanted(i)) { out.push(last[i] === undefined ? null : last[i]); continue }
       f.reload()
       out.push(Model.reading(f.text()))
     }
     return out
   }
 
+  // Closed, the bar needs the processor only: fan, SSD and board sensors are
+  // slow to read (milliseconds each, on the GUI thread) and wait for the popup.
   function poll() {
     if (!found) return
-    fanValues = readAll(fanFiles)
-    tempValues = readAll(tempFiles)
-    var p = Object.assign({}, peaks)
-    var changed = false
-    for (var i = 0; i < found.fans.length; i++) {
-      var v = fanValues[i]
-      if (v !== null && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
+    var busy = opened || wanted !== "" || !polledOnce
+    polledOnce = true
+    var temps = found.temps
+    tempValues = readSome(tempFiles, tempValues, function(i) { return busy || temps[i].group === "cpu" })
+    if (busy) {
+      fanValues = readSome(fanFiles, fanValues, function() { return true })
+      var p = Object.assign({}, peaks)
+      var changed = false
+      for (var i = 0; i < found.fans.length; i++) {
+        var v = fanValues[i]
+        if (v !== null && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
+      }
+      if (changed) peaks = p
+      if (pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
     }
-    if (changed) peaks = p
-    if (platformFile.path !== "") { platformFile.reload(); platformText = platformFile.text() }
-    if (pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
-    loadFile.reload()
-    load = parseFloat(loadFile.text()) || 0
-    if (found && found.maxFan) {
+    // The mode in force and the load matter while Auto decides, or while seen.
+    if (busy || modeSetting === "auto") {
+      if (platformFile.path !== "") { platformFile.reload(); platformText = platformFile.text() }
+      loadFile.reload()
+      load = parseFloat(loadFile.text()) || 0
+    }
+    if (maxAfterInstall) {
       helperFile.reload()
       helperText = helperFile.text()
-      if (maxAfterInstall && helperOk) { maxAfterInstall = false; chooseMode("max") }
+      if (helperOk) { maxAfterInstall = false; chooseMode("max") }
     }
-    if (opened && nvidia) readGpu()
     autoStep()
   }
 
@@ -176,7 +196,7 @@ Panel {
     var target = Model.autoTarget(cpu ? cpu.main : null, load, cpus, profiles.available)
     if (!target || target === active) { pending = ""; return }
     if (pending !== target) { pending = target; pendingSince = Date.now(); return }
-    if (Date.now() - pendingSince >= 20000) { pending = ""; setProfile(target) }
+    if (Date.now() - pendingSince >= autoHold) { pending = ""; setProfile(target) }
   }
 
   function saveMode(value) {
@@ -187,8 +207,11 @@ Panel {
 
   // A button: Auto, a profile of this machine, or Max.
   function chooseMode(m) {
+    if (modes.indexOf(m) < 0) return
     if (m !== "max") maxAfterInstall = false
     if (m === "max") {
+      helperFile.reload()
+      helperText = helperFile.text()
       if (!helperOk) { maxAfterInstall = true; wanted = "max"; installHelper(); return }
       wanted = "max"; wantedReset.restart()
       saveMode("manual")
@@ -203,8 +226,10 @@ Panel {
     setProfile(m)
   }
 
+  property string helperArg: ""
   function runHelper(arg) {
     if (helperProc.running) return
+    helperArg = arg
     helperProc.command = ["pkexec", "/usr/local/libexec/ismoil-fans-max", arg]
     helperProc.running = true
   }
@@ -212,16 +237,26 @@ Panel {
   Process {
     id: helperProc
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: helper:", text.trim()) }
-    // Without an agent in reach polkit cannot ask: the rule from helper/install.sh is missing.
     onExited: function(code) {
-      // Failed (an old helper without the polkit rule): put the current one in place, then try again.
-      if (code !== 0 && !root.maxAfterInstall) { root.helperFailed = root.helperText; root.maxAfterInstall = true; root.installHelper() }
+      // Max was clicked and the helper failed (an old one without the polkit
+      // rule): put the current one in place once, then Max turns on. A failed
+      // "auto" only logs: nothing is installed without a click on Max.
+      if (code !== 0) {
+        root.wanted = ""
+        if (root.helperArg === "max" && root.helperFailed !== root.helperText) {
+          root.helperFailed = root.helperText
+          root.maxAfterInstall = true
+          root.wanted = "max"
+          root.installHelper()
+        }
+      }
       root.poll()
     }
   }
 
   function installHelper() {
-    if (bar) bar.run("omarchy-launch-floating-terminal-with-presentation " + Model.shellQuote(root.localPath(Qt.resolvedUrl("helper/install.sh"))))
+    // No shell parses this argv; the launcher gives its one argument to bash -c: quoted for that.
+    Util.execArgv(["omarchy-launch-floating-terminal-with-presentation", Model.shellQuote(root.localPath(Qt.resolvedUrl("helper/install.sh")))])
   }
 
   // The discrete GPU only while open, and only when it is awake: asking a
@@ -255,9 +290,12 @@ Panel {
 
   // powerprofilesctl says itself whether the mode exists: an instance that
   // never opened (the bar on another monitor) has no list yet and must still work.
+  property string queued: ""
   function setProfile(name) {
     if (profiles.available.length > 0 && profiles.available.indexOf(name) < 0) return
     profiles = Object.assign({}, profiles, { active: name })
+    // One at a time: the last choice made meanwhile runs next.
+    if (setProc.running) { queued = name; return }
     setProc.command = ["powerprofilesctl", "set", name]
     setProc.running = true
   }
@@ -273,15 +311,16 @@ Panel {
     id: setProc
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: powerprofilesctl:", text.trim()) }
     onExited: function(code) {
-      if (code !== 0) console.warn("ismoil.fans: powerprofilesctl set failed", code)
-      if (code !== 0) root.wanted = ""
-      root.readProfiles()
+      if (code !== 0) { console.warn("ismoil.fans: powerprofilesctl set failed", code); root.wanted = "" }
+      if (root.queued !== "") { var next = root.queued; root.queued = ""; root.setProfile(next) }
+      else if (root.opened) root.readProfiles()
     }
   }
 
   // ---------- timers ----------
   Timer {
-    interval: root.wanted !== "" ? 500 : root.opened ? Math.min(2000, root.pollSeconds * 1000) : root.pollSeconds * 1000
+    // Fast for the moment a click waits for the system; not while an installer is open.
+    interval: root.wanted !== "" && !root.maxAfterInstall ? 500 : root.opened ? Math.min(2000, root.pollSeconds * 1000) : root.pollSeconds * 1000
     running: root.found !== null
     repeat: true
     onTriggered: root.poll()
@@ -291,6 +330,7 @@ Panel {
     interval: 5000
     running: root.opened && root.nvidia !== null
     repeat: true
+    triggeredOnStart: true
     onTriggered: root.readGpu()
   }
 
@@ -335,7 +375,7 @@ Panel {
     active: root.heat !== "calm"
     activeColor: root.levelBase
     slotSize: labelText === "" ? Style.bar.iconSlot : Math.ceil(button.canvasSize + barLabelMetrics.width + Style.space(4)) + Style.space(14)
-    tooltipText: root.opened ? "" : Model.tooltip(root.cfg, root.cpu, root.fans)
+    tooltipText: root.opened ? "" : Model.tooltip(root.cfg, root.cpu)
     onPressed: function(b) {
       if (b === Qt.RightButton) { root.readProfiles(); root.nextProfile() }
       else root.toggle()
@@ -349,237 +389,243 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Math.round(Style.space(380) * skin.textScale))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight + skin.bottomPad)
+    contentHeight: panel.fittedContentHeight(panel.loadedContentHeight + skin.bottomPad)
 
-    PanelKeyCatcher {
-      id: keyCatcher
-      anchors.fill: parent
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(t) {
-        if (t === "r") discoverProc.running = true
-        else if (t >= "1" && t <= "9" && Number(t) <= root.modes.length) root.chooseMode(root.modes[Number(t) - 1])
-      }
-
-      Flickable {
-        id: scroller
+    // Built the first time the popup opens, not at shell start on every monitor.
+    content: Component {
+      PanelKeyCatcher {
+        id: keyCatcher
         anchors.fill: parent
-        contentWidth: width
-        contentHeight: column.implicitHeight + skin.bottomPad
-        interactive: contentHeight > height
-        boundsBehavior: Flickable.StopAtBounds
-        clip: true
+        implicitHeight: column.implicitHeight
+        onCloseRequested: root.close()
+        onTabRequested: function(direction) { root.switchPanel(direction) }
+        onTextKey: function(t) {
+          t = I18n.latinKey(t)
+          if (t === "r") discoverProc.running = true
+          else if (t >= "1" && t <= "9" && Number(t) <= root.modes.length) root.chooseMode(root.modes[Number(t) - 1])
+        }
 
-        Column {
-          id: column
-          width: scroller.width
-          spacing: Style.space(12)
+        Flickable {
+          id: scroller
+          anchors.fill: parent
+          contentWidth: width
+          contentHeight: column.implicitHeight + skin.bottomPad
+          interactive: contentHeight > height
+          boundsBehavior: Flickable.StopAtBounds
+          clip: true
 
-          Kit.Header {
-            width: parent.width
-            look: skin
-            glyph: root.icon
-            name: root.tr("title")
-            value: root.cpu ? Model.deg(root.cpu.main) : "—"
-            say: !root.found ? root.tr("reading") : Model.headerSay(root.cfg, root.fans)
-            chip: root.cpu ? root.tr(root.heat) : ""
-            tone: skin.levelFill(root.kitLevel)
-            toneText: skin.levelText(root.kitLevel)
-          }
+          Column {
+            id: column
+            width: scroller.width
+            spacing: Style.space(12)
 
-          // ---------- Fans ----------
-          Kit.Section {
-            id: fanList
-            visible: root.found !== null
-            width: parent.width
-            look: skin
-            caption: root.tr("sectionFans")
-
-            Text {
-              visible: root.fans.length === 0
+            Kit.Header {
               width: parent.width
-              textFormat: Text.PlainText
-              text: root.tr("noFans")
-              color: skin.dim
-              font.family: skin.fontFamily
-              font.pixelSize: skin.small
-              wrapMode: Text.WordWrap
+              look: skin
+              glyph: root.icon
+              name: root.tr("title")
+              value: root.cpu ? Model.deg(root.cpu.main) : "—"
+              say: !root.found ? root.tr("reading") : Model.headerSay(root.cfg, root.fans)
+              chip: root.cpu ? root.tr(root.heat) : ""
+              tone: skin.levelFill(root.kitLevel)
+              toneText: skin.levelText(root.kitLevel)
             }
 
-            Repeater {
-              model: root.fans
+            // ---------- Fans ----------
+            Kit.Section {
+              id: fanList
+              visible: root.found !== null
+              width: parent.width
+              look: skin
+              caption: root.tr("sectionFans")
 
-              delegate: Item {
-                required property var modelData
-                width: fanList.width - fanList.padding * 2
-                implicitHeight: fanLine.implicitHeight + Style.space(10)
+              Text {
+                visible: root.fans.length === 0
+                width: parent.width
+                textFormat: Text.PlainText
+                text: root.tr("noFans")
+                color: skin.dim
+                font.family: skin.fontFamily
+                font.pixelSize: skin.small
+                wrapMode: Text.WordWrap
+              }
 
-                Row {
-                  id: fanLine
-                  width: parent.width
-                  spacing: Style.space(10)
-                  anchors.verticalCenter: parent.verticalCenter
+              Repeater {
+                model: root.fans.length  // a count: rows stay, only their numbers change, so the icon keeps spinning
 
-                  // Spins at a pace that follows the speed, only while it is seen.
-                  Kit.Glyph {
-                    id: blade
-                    // Centred on its ink, so it spins in place instead of wobbling.
-                    width: 2 * Math.round(skin.strong * 0.7)
-                    height: width
-                    text: root.icon
-                    color: skin.accentText
-                    fontFamily: skin.fontFamily
-                    pixelSize: 2 * Math.round(skin.strong / 2)
+                delegate: Item {
+                  required property int index
+                  readonly property var fan: root.fans[index] || ({ label: "", rpm: 0, text: "", fraction: 0 })
+                  width: fanList.width - fanList.padding * 2
+                  implicitHeight: fanLine.implicitHeight + Style.space(10)
+
+                  Row {
+                    id: fanLine
+                    width: parent.width
+                    spacing: Style.space(10)
                     anchors.verticalCenter: parent.verticalCenter
-                    RotationAnimator on rotation {
-                      running: root.opened && skin.motion && modelData.rpm > 0
-                      from: 0; to: 360; loops: Animation.Infinite
-                      duration: Math.max(350, Math.min(3000, 3000000 / Math.max(1, modelData.rpm)))
+
+                    // Spins at a pace that follows the speed, only while it is seen.
+                    Kit.Glyph {
+                      id: blade
+                      // Centred on its ink, so it spins in place instead of wobbling.
+                      width: 2 * Math.round(skin.strong * 0.7)
+                      height: width
+                      text: root.icon
+                      color: skin.accentText
+                      fontFamily: skin.fontFamily
+                      pixelSize: 2 * Math.round(skin.strong / 2)
+                      anchors.verticalCenter: parent.verticalCenter
+                      RotationAnimator on rotation {
+                        running: root.opened && skin.motion && fan.rpm > 0
+                        from: 0; to: 360; loops: Animation.Infinite
+                        duration: Math.max(350, Math.min(3000, 3000000 / Math.max(1, fan.rpm)))
+                      }
                     }
-                  }
 
-                  Column {
-                    width: parent.width - blade.width - fanValue.width - parent.spacing * 2
-                    spacing: Style.space(4)
-                    anchors.verticalCenter: parent.verticalCenter
+                    Column {
+                      width: parent.width - blade.width - fanValue.width - parent.spacing * 2
+                      spacing: Style.space(4)
+                      anchors.verticalCenter: parent.verticalCenter
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: fan.label
+                        color: skin.ink
+                        font.family: skin.fontFamily
+                        font.pixelSize: skin.small
+                      }
+                      Kit.Meter { width: parent.width; look: skin; fraction: fan.fraction }
+                    }
 
                     Text {
+                      id: fanValue
+                      width: valueMetrics.width
+                      horizontalAlignment: Text.AlignRight
+                      anchors.verticalCenter: parent.verticalCenter
                       textFormat: Text.PlainText
-                      text: modelData.label
+                      text: fan.text
                       color: skin.ink
                       font.family: skin.fontFamily
                       font.pixelSize: skin.small
+                      font.bold: true
+                      font.features: { "tnum": 1 }
                     }
-                    Kit.Meter { width: parent.width; look: skin; fraction: modelData.fraction }
-                  }
-
-                  Text {
-                    id: fanValue
-                    width: valueMetrics.width
-                    horizontalAlignment: Text.AlignRight
-                    anchors.verticalCenter: parent.verticalCenter
-                    textFormat: Text.PlainText
-                    text: modelData.text
-                    color: skin.ink
-                    font.family: skin.fontFamily
-                    font.pixelSize: skin.small
-                    font.bold: true
-                    font.features: { "tnum": 1 }
                   }
                 }
               }
             }
-          }
 
-          // ---------- Temperatures ----------
-          Kit.Section {
-            id: tempList
-            visible: root.found !== null
-            width: parent.width
-            look: skin
-            caption: root.tr("sectionTemps")
-            spacing: Style.spacing.labelGap
-
-            Text {
-              visible: root.tempGroups.length === 0 && !root.nvidia
-              textFormat: Text.PlainText
-              text: root.tr("noSensors")
-              color: skin.dim
-              font.family: skin.fontFamily
-              font.pixelSize: skin.small
-            }
-
-            Repeater {
-              model: root.tempGroups
-              delegate: Kit.InfoPair {
-                required property var modelData
-                look: skin
-                label: Model.groupLabel(root.cfg, modelData.group)
-                       + (modelData.group === "cpu" && modelData.hottest > modelData.main + 1 ? " · " + root.tr("hottest", { t: Model.deg(modelData.hottest) }) : "")
-                value: Model.deg(modelData.main)
-                valueColor: modelData.group === "cpu" ? skin.levelText(root.kitLevel) : skin.ink
-              }
-            }
-
-            Kit.InfoPair {
-              visible: root.nvidia !== null && (root.gpuAsleep || root.gpuTemp >= 0)
+            // ---------- Temperatures ----------
+            Kit.Section {
+              id: tempList
+              visible: root.found !== null
+              width: parent.width
               look: skin
-              label: root.tr("groupGpu") + " · NVIDIA"
-              value: root.gpuAsleep ? root.tr("gpuAsleep") : Model.deg(root.gpuTemp)
-              valueColor: root.gpuAsleep ? skin.dim : skin.ink
-            }
-          }
+              caption: root.tr("sectionTemps")
+              spacing: Style.spacing.labelGap
 
-          // ---------- Mode: whatever this computer offers ----------
-          Kit.Section {
-            visible: root.found !== null
-            width: parent.width
-            look: skin
-            caption: root.tr("sectionMode")
-            hint: root.modes.length > 0 ? root.tr("modeHint") : ""
-
-            Text {
-              visible: root.modes.length === 0
-              width: parent.width
-              textFormat: Text.PlainText
-              text: root.tr("noModes")
-              color: skin.dim
-              font.family: skin.fontFamily
-              font.pixelSize: skin.small
-              wrapMode: Text.WordWrap
-            }
-
-            Flow {
-              visible: root.modes.length > 0
-              width: parent.width
-              spacing: Style.space(6)
+              Text {
+                visible: root.tempGroups.length === 0 && !root.nvidia
+                textFormat: Text.PlainText
+                text: root.tr("noSensors")
+                color: skin.dim
+                font.family: skin.fontFamily
+                font.pixelSize: skin.small
+              }
 
               Repeater {
-                model: root.modes
-                delegate: Kit.ActionButton {
+                model: root.tempGroups
+                delegate: Kit.InfoPair {
                   required property var modelData
                   look: skin
-                  compact: true
-                  text: Model.modeLabel(root.cfg, modelData)
-                  selected: root.selected === modelData
-                  danger: modelData === "max" && root.maxOn
-                  onClicked: root.chooseMode(modelData)
+                  label: Model.groupLabel(root.cfg, modelData.group)
+                         + (modelData.group === "cpu" && modelData.hottest > modelData.main + 1 ? " · " + root.tr("hottest", { t: Model.deg(modelData.hottest) }) : "")
+                  value: Model.deg(modelData.main)
+                  valueColor: modelData.group === "cpu" ? skin.levelText(root.kitLevel) : skin.ink
                 }
+              }
+
+              Kit.InfoPair {
+                visible: root.nvidia !== null && (root.gpuAsleep || root.gpuTemp >= 0)
+                look: skin
+                label: root.tr("groupGpu") + " · NVIDIA"
+                value: root.gpuAsleep ? root.tr("gpuAsleep") : Model.deg(root.gpuTemp)
+                valueColor: root.gpuAsleep ? skin.dim : skin.ink
               }
             }
 
-            Text {
-              visible: text !== ""
+            // ---------- Mode: whatever this computer offers ----------
+            Kit.Section {
+              visible: root.found !== null
               width: parent.width
-              textFormat: Text.PlainText
-              text: root.maxOn ? root.tr("maxNow")
-                  : root.selected === "auto" && root.active !== "" ? root.tr("autoNow", { mode: Model.modeLabel(root.cfg, root.active).toLowerCase() }) : ""
-              color: root.maxOn ? skin.badText : skin.dim
-              font.family: skin.fontFamily
-              font.pixelSize: skin.small
-              wrapMode: Text.WordWrap
+              look: skin
+              caption: root.tr("sectionMode")
+              hint: root.modes.length > 0 ? root.tr("modeHint") : ""
+
+              Text {
+                visible: root.modes.length === 0
+                width: parent.width
+                textFormat: Text.PlainText
+                text: root.tr("noModes")
+                color: skin.dim
+                font.family: skin.fontFamily
+                font.pixelSize: skin.small
+                wrapMode: Text.WordWrap
+              }
+
+              Flow {
+                visible: root.modes.length > 0
+                width: parent.width
+                spacing: Style.space(6)
+
+                Repeater {
+                  model: root.modes
+                  delegate: Kit.ActionButton {
+                    required property var modelData
+                    look: skin
+                    compact: true
+                    text: Model.modeLabel(root.cfg, modelData)
+                    selected: root.selected === modelData
+                    danger: modelData === "max" && root.maxOn
+                    onClicked: root.chooseMode(modelData)
+                  }
+                }
+              }
+
+              Text {
+                visible: text !== ""
+                width: parent.width
+                textFormat: Text.PlainText
+                text: root.maxOn ? root.tr("maxNow")
+                    : root.selected === "auto" && root.active !== "" ? root.tr("autoNow", { mode: Model.modeLabel(root.cfg, root.active).toLowerCase() }) : ""
+                color: root.maxOn ? skin.badText : skin.dim
+                font.family: skin.fontFamily
+                font.pixelSize: skin.small
+                wrapMode: Text.WordWrap
+              }
+
+              Text {
+                visible: root.maxAfterInstall
+                width: parent.width
+                textFormat: Text.PlainText
+                text: root.tr("installing")
+                color: skin.warnText
+                font.family: skin.fontFamily
+                font.pixelSize: skin.small
+                wrapMode: Text.WordWrap
+              }
             }
 
-            Text {
-              visible: root.maxAfterInstall
+            Kit.Signature {
               width: parent.width
-              textFormat: Text.PlainText
-              text: root.tr("installing")
-              color: skin.warnText
-              font.family: skin.fontFamily
-              font.pixelSize: skin.small
-              wrapMode: Text.WordWrap
+              look: skin
+              widget: "cooling"
+              extra: root.found ? root.tr("sensors").toLowerCase() + " " + (root.found.fans.length + root.found.temps.length) : ""
+              version: root.version
             }
-          }
-
-          Kit.Signature {
-            width: parent.width
-            look: skin
-            widget: "cooling"
-            extra: root.found ? root.tr("sensors").toLowerCase() + " " + (root.found.fans.length + root.found.temps.length) : ""
-            version: root.version
           }
         }
       }

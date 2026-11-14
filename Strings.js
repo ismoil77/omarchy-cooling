@@ -26,9 +26,7 @@ var en = {
   groupBoard: "Board",
   groupOther: "Other",
   hottest: "hottest core {t}",
-  limit: "limit {t}",
   gpuAsleep: "asleep",
-  gpuAsleepTip: "Not woken to read: that would drain the battery",
   modeAuto: "Auto",
   modeCool: "Cool",
   modeQuiet: "Quiet",
@@ -40,7 +38,7 @@ var en = {
   maxNow: "Fans at full speed",
   installing: "Type your password in the window that opened, once: Max turns on by itself after that.",
   noModes: "This computer offers no power modes",
-  tipBar: "Cooling: processor {t} · {fans}",
+  tipBar: "Cooling: processor {t}",
   sensors: "Sensors"
 }
 
@@ -68,9 +66,7 @@ var ru = {
   groupBoard: "Плата",
   groupOther: "Другое",
   hottest: "самое горячее ядро {t}",
-  limit: "предел {t}",
   gpuAsleep: "спит",
-  gpuAsleepTip: "Не бужу, чтобы прочитать: это съест батарею",
   modeAuto: "Авто",
   modeCool: "Прохладно",
   modeQuiet: "Тихо",
@@ -82,7 +78,7 @@ var ru = {
   maxNow: "Вентиляторы на полную",
   installing: "Введи пароль в открывшемся окне, один раз: дальше максимум включится сам.",
   noModes: "Этот компьютер не даёт выбирать режим",
-  tipBar: "Охлаждение: процессор {t} · {fans}",
+  tipBar: "Охлаждение: процессор {t}",
   sensors: "Датчики"
 }
 

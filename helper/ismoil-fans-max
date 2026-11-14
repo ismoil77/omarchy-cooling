@@ -2,12 +2,13 @@
 # Root helper of the Cooling widget: fans at full speed, or back to how they were.
 # It takes no path and no number from its caller, only one of two words.
 #   ismoil-fans-max max | auto
-# helper-version: 3
+# helper-version: 4
 #
 # Backends, found on this machine at each run:
-#   hwmon     pwmN_enable = 0 is "no control, full speed" in the kernel's hwmon ABI
-#             (hp-wmi, asus-wmi, dell-smm, nct6775, it87 ...). The values before
-#             are saved and put back on auto. GPU drivers are left alone.
+#   hwmon     pwmN_enable = 0 where the driver documents it as "full speed" (hp-wmi,
+#             asus-wmi, nct67xx, it87, f718xx, w836xx); any other driver gets manual
+#             mode at 255, because 0 can mean "off" there (pwm-fan). The values
+#             before are saved and put back on auto. GPU drivers are left alone.
 #   thinkpad  /proc/acpi/ibm/fan "level full-speed" / "level auto" (needs fan_control=1)
 #   msi-ec    cooler_boost on / off
 # /run/ismoil-fans/max (readable by anyone) says Max is on and with what.
@@ -25,43 +26,65 @@ esac
 mkdir -p "$RUN" && chmod 0755 "$RUN"
 done_any=0
 
+# Drivers where pwmN_enable = 0 is documented as "no control, full speed".
+# Elsewhere 0 can mean "off" (pwm-fan), so those get manual mode at 255.
+full_speed_at_zero() {
+  case "$1" in hp|asus|nct6*|it87*|it86*|f718*|w836*) return 0 ;; esac
+  return 1
+}
+
+# The hwmon folder a driver name has now (numbers change when modules reload).
+hwmon_of() {
+  local d
+  for d in "$SYS"/class/hwmon/hwmon*; do
+    [ "$(cat "$d/name" 2>/dev/null)" = "$1" ] && { printf '%s' "$d"; return 0; }
+  done
+  return 1
+}
+
+# Saved as: driver-name  N  pwmN_enable  pwmN   (what they were before Max)
 hwmon_max() {
-  local d name e base v
+  local d name e n was_enable was_pwm kept
   : > "$RUN/saved.tmp"
   for d in "$SYS"/class/hwmon/hwmon*; do
     name=$(cat "$d/name" 2>/dev/null) || continue
     case "$SKIP" in *" $name "*) continue ;; esac
+    case "$name" in *[!A-Za-z0-9_-]*|'') continue ;; esac
     for e in "$d"/pwm[0-9]_enable "$d"/pwm[0-9][0-9]_enable; do
       [ -e "$e" ] || continue
-      v=$(cat "$e" 2>/dev/null) || continue
-      # Already saved from an earlier max: keep the first (real) value.
-      [ -s "$RUN/saved" ] && grep -q "^$e " "$RUN/saved" && v=$(grep "^$e " "$RUN/saved" | cut -d' ' -f2)
-      base=${e%_enable}
-      if printf 0 > "$e" 2>/dev/null; then
-        printf '%s %s\n' "$e" "$v" >> "$RUN/saved.tmp"; done_any=1
-      elif printf 1 > "$e" 2>/dev/null && printf 255 > "$base" 2>/dev/null; then
-        printf '%s %s\n' "$e" "$v" >> "$RUN/saved.tmp"; done_any=1
+      n=${e##*/pwm}; n=${n%_enable}
+      was_enable=$(cat "$e" 2>/dev/null) || continue
+      was_pwm=$(cat "$d/pwm$n" 2>/dev/null) || was_pwm=-
+      # Max twice in a row: the first, real values stay.
+      kept=$(grep "^$name $n " "$RUN/saved" 2>/dev/null | head -n 1)
+      if full_speed_at_zero "$name"; then
+        printf 0 > "$e" 2>/dev/null || continue
+      else
+        { printf 1 > "$e" && printf 255 > "$d/pwm$n"; } 2>/dev/null || continue
       fi
+      printf '%s\n' "${kept:-$name $n $was_enable $was_pwm}" >> "$RUN/saved.tmp"
+      done_any=1
     done
   done
   mv "$RUN/saved.tmp" "$RUN/saved"
 }
 
 hwmon_auto() {
-  local e v name d
+  local name n was_enable was_pwm d
   if [ -s "$RUN/saved" ]; then
-    while read -r e v; do
-      case "$e" in "$SYS"/class/hwmon/hwmon*/pwm*_enable) ;; *) continue ;; esac
-      case "$v" in ''|*[!0-9]*) continue ;; esac
-      printf '%s' "$v" > "$e" 2>/dev/null && done_any=1
+    while read -r name n was_enable was_pwm; do
+      case "$name" in *[!A-Za-z0-9_-]*|'') continue ;; esac
+      case "$n$was_enable" in *[!0-9]*|'') continue ;; esac
+      d=$(hwmon_of "$name") || continue
+      case "$was_pwm" in *[!0-9]*|'') ;; *) printf '%s' "$was_pwm" > "$d/pwm$n" 2>/dev/null ;; esac
+      printf '%s' "$was_enable" > "$d/pwm${n}_enable" 2>/dev/null && done_any=1
     done < "$RUN/saved"
     rm -f "$RUN/saved"
     return
   fi
   # Nothing saved (after a reboot): only the drivers whose automatic value is known.
-  for d in "$SYS"/class/hwmon/hwmon*; do
-    name=$(cat "$d/name" 2>/dev/null) || continue
-    case "$name" in hp|asus) ;; *) continue ;; esac
+  for name in hp asus; do
+    d=$(hwmon_of "$name") || continue
     [ -e "$d/pwm1_enable" ] && printf 2 > "$d/pwm1_enable" 2>/dev/null && done_any=1
   done
 }

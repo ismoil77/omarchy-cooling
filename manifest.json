@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "ismoil.fans",
   "name": "Cooling",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": "ismoil",
   "license": "MIT",
-  "description": "Fans and temperatures for any machine: processor temperature in the bar, coloured as it heats; a popup with every fan hwmon reports and its speed, temperatures by group, and the power modes this computer offers plus Auto (quiet at rest, medium at work) and Max (full fan speed through an optional root helper). Says so when Linux sees no fan. No background processes; a sleeping GPU is never woken. English and Russian.",
+  "description": "Fans and temperatures for any machine: processor temperature in the bar, coloured as it heats; a popup with every fan hwmon reports and its speed, temperatures by group, and the power modes this computer offers plus Auto (quiet at rest, medium at work) and Max (full fan speed through an optional root helper). Says so when Linux sees no fan. No process per reading; a sleeping GPU is never woken. English and Russian.",
   "kinds": [
     "bar-widget"
   ],

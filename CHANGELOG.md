@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 — audit
+
+- The popup is built the first time it opens, not at shell start on every monitor.
+- Closed, only the processor's sensors are read; fans, SSD and board (slow files, read on the GUI
+  thread) wait for the popup. The helper file is read only when Max is clicked.
+- Fan rows are kept between readings: the icons spin evenly instead of restarting every 2 s.
+- A second mode click while one is being applied is queued instead of lost. `nvidia-smi` runs every 5 s
+  while open, not every poll. Two bars no longer both switch the profile in Auto.
+- A failed "back to automatic" never opens the installer; IPC `mode` ignores names this machine lacks.
+- Helper 4: `pwmN_enable = 0` only on drivers that document it as full speed (hp, asus, nct67xx, it87,
+  f718xx, w836xx); other drivers get manual mode at 255 (0 turns a `pwm-fan` off). Settings are saved by
+  driver name, so they come back after hwmon renumbering.
+- The installer path is quoted for both shells that parse it.
+- README: remove the helper before the plugin; the `mode` setting; what runs in the background.
+
 ## 1.2.1
 
 - Max never asks for the password again because of a helper version: any installed helper is used,

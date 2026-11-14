@@ -34,7 +34,7 @@ function reading(text) {
 // "88°"
 function deg(t) { return t === null || t === undefined ? "—" : Math.round(t) + "°" }
 
-// Temperatures by group: [{ group, main, hottest, crit, rows }] in degrees,
+// Temperatures by group: [{ group, main, hottest, crit }] in degrees,
 // in a fixed order. The CPU's main figure is its package (or Tctl), the
 // hottest core beside it; other groups show their hottest sensor.
 function groups(temps, values) {
@@ -43,9 +43,8 @@ function groups(temps, values) {
     var v = values[i]
     if (v === null || v === undefined) continue
     var t = temps[i]
-    var g = by[t.group] || (by[t.group] = { group: t.group, main: null, hottest: null, crit: null, rows: [] })
+    var g = by[t.group] || (by[t.group] = { group: t.group, main: null, hottest: null, crit: null })
     var c = v / 1000
-    g.rows.push({ label: t.label, t: c })
     if (g.hottest === null || c > g.hottest) g.hottest = c
     if (/^(Package id|Tctl|Tdie|Composite|edge)/.test(t.label)) g.main = c
     if (t.crit !== null && t.crit !== undefined) g.crit = g.crit === null ? t.crit : Math.min(g.crit, t.crit)
@@ -80,7 +79,7 @@ function fanRows(cfg, fans, values, peaks) {
   for (var i = 0; i < fans.length; i++) {
     var rpm = values[i]
     if (rpm === null || rpm === undefined) continue
-    out.push({ key: fans[i].path, label: tr(cfg, "fan", { n: out.length + 1 }), rpm: rpm,
+    out.push({ label: tr(cfg, "fan", { n: out.length + 1 }), rpm: rpm,
                text: rpm > 0 ? tr(cfg, "rpm", { n: rpm }) : tr(cfg, "stopped"), fraction: rpm / peak })
   }
   return out
@@ -96,8 +95,9 @@ function headerSay(cfg, fans) {
   return tr(cfg, "fansSay", { fans: word, rpm: moving.map(function(f) { return f.rpm }).join(" · ") })
 }
 
-function tooltip(cfg, cpu, fans) {
-  return tr(cfg, "tipBar", { t: deg(cpu ? cpu.main : null), fans: headerSay(cfg, fans) })
+// Closed, only the processor is read: the tooltip says what is fresh.
+function tooltip(cfg, cpu) {
+  return tr(cfg, "tipBar", { t: deg(cpu ? cpu.main : null) })
 }
 
 // `powerprofilesctl list`: "* performance:" marks the active one. Every
