@@ -49,8 +49,16 @@ class Discover(unittest.TestCase):
         put(root, "class/hwmon/hwmon5/pwm1_enable", "2\n")
         put(root, "firmware/acpi/platform_profile", "balanced\n")
         d = discover.discover(root)
-        self.assertTrue(d["maxFan"].endswith("hwmon5/pwm1_enable"))
+        self.assertEqual(d["maxFan"], "hwmon")
         self.assertTrue(d["platform"].endswith("firmware/acpi/platform_profile"))
+
+    def test_a_gpu_fan_is_not_a_full_speed_switch(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        put(root, "class/hwmon/hwmon2/name", "amdgpu\n"); put(root, "class/hwmon/hwmon2/pwm1_enable", "2\n")
+        self.assertIsNone(discover.discover(root)["maxFan"])
+        put(root, "devices/platform/msi-ec/cooler_boost", "off\n")
+        self.assertEqual(discover.discover(root)["maxFan"], "msi-ec")
 
     def test_acpi_fan_alone_still_counts(self):
         root = tempfile.mkdtemp()

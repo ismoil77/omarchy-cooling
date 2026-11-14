@@ -178,7 +178,7 @@ function shellQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // The helper the widget needs; install.sh puts this one in place. Older ones
 // (or none) make the widget run the installer itself.
-var HELPER_VERSION = 2
+var HELPER_VERSION = 3
 function helperVersion(text) {
   var m = String(text || "").match(/helper-version:\s*(\d+)/)
   return m ? Number(m[1]) : 0

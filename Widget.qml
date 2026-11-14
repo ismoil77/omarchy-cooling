@@ -61,7 +61,7 @@ Panel {
   onMaxAfterInstallChanged: if (maxAfterInstall) installGiveUp.restart()
   // The installer window closed without a password: stop waiting for it.
   Timer { id: installGiveUp; interval: 180000; onTriggered: { root.maxAfterInstall = false; root.wanted = "" } }
-  readonly property bool maxOn: pwmText.trim() === "0"
+  readonly property bool maxOn: pwmText.trim() === "on"
   readonly property string active: Model.profileFromPlatform(platformText, profiles.available) || profiles.active
   readonly property var modes: Model.modes(profiles.available, !!(found && found.maxFan))
   // The button just clicked shows at once; the system's answer replaces it
@@ -124,7 +124,8 @@ Panel {
   // The mode in force and the full-speed switch: readable by anyone, so the
   // popup always shows what is true, whoever changed it.
   FileView { id: platformFile; path: root.found && root.found.platform ? root.found.platform : ""; blockLoading: true }
-  FileView { id: pwmFile; path: root.found && root.found.maxFan ? root.found.maxFan : ""; blockLoading: true }
+  // Written by the helper while Max is on, whatever the hardware.
+  FileView { id: pwmFile; path: root.found && root.found.maxFan ? "/run/ismoil-fans/max" : ""; blockLoading: true; printErrors: false }
   FileView { id: loadFile; path: "/proc/loadavg"; blockLoading: true }
   FileView { id: helperFile; path: "/usr/local/libexec/ismoil-fans-max"; blockLoading: true; printErrors: false }
   FileView { id: onlineFile; path: "/sys/devices/system/cpu/online"; blockLoading: true; onLoaded: root.cpus = Model.cpuCount(text()) }

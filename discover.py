@@ -13,8 +13,10 @@ human words:
   profiles  bool                                    power-profiles-daemon is there
   platform  path or null                            platform_profile: the mode in force,
                                                     readable without root
-  maxFan    path or null                            hp-wmi pwm1_enable (0 = full speed,
-                                                    2 = auto), readable without root
+  maxFan    "hwmon" / "thinkpad" / "msi-ec" or null   a full-speed switch the helper
+                                                    knows: hwmon pwmN_enable (not on a
+                                                    GPU), thinkpad_acpi with fan_control,
+                                                    msi-ec cooler_boost
   helper    bool                                    the root helper for full speed is installed
 
   discover.py [SYSFS_ROOT]     (a fake /sys for tests)
@@ -35,6 +37,8 @@ SKIP = {"BAT0", "BAT1", "ADP1", "AC", "ucsi_source_psy_USBC000:001"}
 VENDORS = {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}
 # Installed by helper/install.sh; writes only "full speed" or "auto" to hp-wmi.
 HELPER = "/usr/local/libexec/ismoil-fans-max"
+# Their fans have their own control; Max leaves them alone (so does the helper).
+GPU_DRIVERS = {"amdgpu", "nouveau", "radeon", "i915", "xe"}
 
 
 def read(path):
@@ -110,8 +114,19 @@ def discover(root="/sys"):
     max_fan = None
     for hw in hwmons:
         d = os.path.join(base, hw)
-        if read(os.path.join(d, "name")) == "hp" and os.path.exists(os.path.join(d, "pwm1_enable")):
-            max_fan = os.path.join(d, "pwm1_enable")
+        if read(os.path.join(d, "name")) in GPU_DRIVERS:
+            continue
+        try:
+            if any(f.startswith("pwm") and f.endswith("_enable") for f in os.listdir(d)):
+                max_fan = "hwmon"
+                break
+        except OSError:
+            continue
+    ibm = os.path.join(root, "..", "proc", "acpi", "ibm", "fan") if root != "/sys" else "/proc/acpi/ibm/fan"
+    if max_fan is None and "level" in read(ibm) and "commands:" in read(ibm):
+        max_fan = "thinkpad"
+    if max_fan is None and os.path.exists(os.path.join(root, "devices", "platform", "msi-ec", "cooler_boost")):
+        max_fan = "msi-ec"
     platform = os.path.join(root, "firmware", "acpi", "platform_profile")
     return {"fans": fans, "temps": temps, "gpus": gpus,
             "profiles": shutil.which("powerprofilesctl") is not None,

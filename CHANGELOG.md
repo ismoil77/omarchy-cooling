@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- Max on any machine the helper knows: every hwmon fan (hp-wmi, asus-wmi, dell-smm, nct6775, it87 …)
+  through the kernel's `pwmN_enable = 0`, ThinkPad (`/proc/acpi/ibm/fan`), MSI (`msi-ec cooler_boost`).
+  The settings from before Max are saved and put back exactly; GPU fans are never touched; without any
+  of these the Max button does not appear.
+- Max's state comes from `/run/ismoil-fans/max`, written by the helper, so it reads the same on any hardware.
+- Helper version 3 (the widget updates an older one on the next Max click). Tests run it on fake
+  `/sys`, `/proc` and `/run`.
+
 ## 1.1.2
 
 - Max installs what it needs by itself: when the helper is missing or older than the widget needs

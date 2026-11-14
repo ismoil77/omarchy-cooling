@@ -1,19 +1,92 @@
 #!/bin/bash
-# Root helper of the Cooling widget: fans at full speed, or back to automatic.
-# It does nothing else, takes no path and no number from its caller.
+# Root helper of the Cooling widget: fans at full speed, or back to how they were.
+# It takes no path and no number from its caller, only one of two words.
 #   ismoil-fans-max max | auto
-# helper-version: 2
-set -eu
+# helper-version: 3
+#
+# Backends, found on this machine at each run:
+#   hwmon     pwmN_enable = 0 is "no control, full speed" in the kernel's hwmon ABI
+#             (hp-wmi, asus-wmi, dell-smm, nct6775, it87 ...). The values before
+#             are saved and put back on auto. GPU drivers are left alone.
+#   thinkpad  /proc/acpi/ibm/fan "level full-speed" / "level auto" (needs fan_control=1)
+#   msi-ec    cooler_boost on / off
+# /run/ismoil-fans/max (readable by anyone) says Max is on and with what.
+set -u
+SYS=/sys
+PROC=/proc
+RUN=/run/ismoil-fans
+SKIP=" amdgpu nouveau radeon i915 xe "
+
 case "${1:-}" in
-  max) value=0 ;;   # hp-wmi: 0 = full speed
-  auto) value=2 ;;  # hp-wmi: 2 = the firmware's own curve
+  max|auto) ;;
   *) echo "usage: ismoil-fans-max max|auto" >&2; exit 2 ;;
 esac
-# The hwmon number changes between boots: find the one hp-wmi registers.
-for d in /sys/class/hwmon/hwmon*; do
-  [ "$(cat "$d/name" 2>/dev/null)" = hp ] && [ -e "$d/pwm1_enable" ] || continue
-  printf '%s' "$value" > "$d/pwm1_enable"
-  exit 0
-done
-echo "ismoil-fans-max: no hp-wmi fan control on this machine" >&2
-exit 1
+
+mkdir -p "$RUN" && chmod 0755 "$RUN"
+done_any=0
+
+hwmon_max() {
+  local d name e base v
+  : > "$RUN/saved.tmp"
+  for d in "$SYS"/class/hwmon/hwmon*; do
+    name=$(cat "$d/name" 2>/dev/null) || continue
+    case "$SKIP" in *" $name "*) continue ;; esac
+    for e in "$d"/pwm[0-9]_enable "$d"/pwm[0-9][0-9]_enable; do
+      [ -e "$e" ] || continue
+      v=$(cat "$e" 2>/dev/null) || continue
+      # Already saved from an earlier max: keep the first (real) value.
+      [ -s "$RUN/saved" ] && grep -q "^$e " "$RUN/saved" && v=$(grep "^$e " "$RUN/saved" | cut -d' ' -f2)
+      base=${e%_enable}
+      if printf 0 > "$e" 2>/dev/null; then
+        printf '%s %s\n' "$e" "$v" >> "$RUN/saved.tmp"; done_any=1
+      elif printf 1 > "$e" 2>/dev/null && printf 255 > "$base" 2>/dev/null; then
+        printf '%s %s\n' "$e" "$v" >> "$RUN/saved.tmp"; done_any=1
+      fi
+    done
+  done
+  mv "$RUN/saved.tmp" "$RUN/saved"
+}
+
+hwmon_auto() {
+  local e v name d
+  if [ -s "$RUN/saved" ]; then
+    while read -r e v; do
+      case "$e" in "$SYS"/class/hwmon/hwmon*/pwm*_enable) ;; *) continue ;; esac
+      case "$v" in ''|*[!0-9]*) continue ;; esac
+      printf '%s' "$v" > "$e" 2>/dev/null && done_any=1
+    done < "$RUN/saved"
+    rm -f "$RUN/saved"
+    return
+  fi
+  # Nothing saved (after a reboot): only the drivers whose automatic value is known.
+  for d in "$SYS"/class/hwmon/hwmon*; do
+    name=$(cat "$d/name" 2>/dev/null) || continue
+    case "$name" in hp|asus) ;; *) continue ;; esac
+    [ -e "$d/pwm1_enable" ] && printf 2 > "$d/pwm1_enable" 2>/dev/null && done_any=1
+  done
+}
+
+thinkpad() {
+  local f="$PROC/acpi/ibm/fan"
+  [ -w "$f" ] && grep -q '^commands:.*level' "$f" 2>/dev/null || return 0
+  if [ "$1" = max ]; then printf 'level full-speed' > "$f" && done_any=1
+  else printf 'level auto' > "$f" && done_any=1; fi
+}
+
+msi_ec() {
+  local f="$SYS/devices/platform/msi-ec/cooler_boost"
+  [ -e "$f" ] || return 0
+  if [ "$1" = max ]; then printf on > "$f" && done_any=1
+  else printf off > "$f" && done_any=1; fi
+}
+
+if [ "$1" = max ]; then
+  hwmon_max; thinkpad max; msi_ec max
+  if [ "$done_any" = 1 ]; then echo on > "$RUN/max"; chmod 0644 "$RUN/max"; exit 0; fi
+  echo "ismoil-fans-max: no fan control this helper knows on this machine" >&2
+  exit 1
+fi
+
+hwmon_auto; thinkpad auto; msi_ec auto
+rm -f "$RUN/max"
+exit 0

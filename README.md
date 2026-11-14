@@ -18,9 +18,17 @@ and a popup with every fan the kernel reports and its speed, temperatures by gro
     (power-saver → Quiet, balanced → Medium, performance → Powerful; an unknown name as it is);
   - **Auto** (the default, when there are two or more): the quietest profile while the computer rests,
     medium while it works (load or 70°+), never the loudest; it changes only after its reason held 20 s;
-  - **Max**, only where a full-speed fan switch exists (hp-wmi today): fans at full speed. It needs a
-    one-time install of a root helper — the widget offers it, nothing is installed until you click
-    *Install* and type your password. Fans go back to automatic at every boot.
+  - **Max**, only where a full-speed switch exists: fans at full speed. The first click opens the
+    installer of a small root helper — your password is the only thing to type — and Max turns on as
+    soon as it is in place; after that it needs no password. Where it works:
+
+    | Hardware | How | Back to automatic |
+    |---|---|---|
+    | most laptops and boards (hp-wmi, asus-wmi, dell-smm, nct6775, it87 …) | hwmon `pwmN_enable = 0`, "no control, full speed" in the kernel's hwmon ABI | the values from before are put back exactly |
+    | ThinkPad (`thinkpad_acpi fan_control=1`) | `/proc/acpi/ibm/fan` `level full-speed` | `level auto` |
+    | MSI (`msi-ec`) | `cooler_boost on` | `off` |
+
+    Graphics cards are never touched. With none of these the Max button does not appear.
   - The mode shown is read from `platform_profile`, so it is always the one in force.
   - Right click on the bar steps through the modes (Max left out).
 - Colours: cool, warm from 75°, hot near the processor's limit (or 90°).
@@ -32,13 +40,16 @@ re-read in place every `interval` seconds, with no process.
 
 ## The Max helper (optional)
 
-`helper/install.sh` puts three files in place (and `helper/install.sh remove` takes them out):
+The widget runs `helper/install.sh` itself the first time Max is clicked (and when the installed
+helper is older than it needs). It puts in place, and `helper/install.sh remove` takes out:
 
-- `/usr/local/libexec/ismoil-fans-max` — writes `0` (full speed) or `2` (auto) to hp-wmi's
-  `pwm1_enable`; it takes no path or number from its caller;
+- `/usr/local/libexec/ismoil-fans-max` — takes one word, `max` or `auto`, nothing else; saves the fan
+  settings it changes in `/run/ismoil-fans` and puts them back; `/run/ismoil-fans/max` tells the widget
+  Max is on;
 - a polkit action for it, and a rule letting administrators (`wheel`) run this one helper without a
-  password: the shell runs outside the login session, where polkit has no agent to ask one;
-- `ismoil-fans-auto.service`, which sets the fans back to automatic at boot.
+  password: the shell runs in the user's systemd manager, outside the login session, where polkit has
+  no agent to ask one;
+- `ismoil-fans-auto.service`, which sets known fans (hp, asus, ThinkPad, MSI) back to automatic at boot.
 
 ## Install
 
@@ -74,7 +85,7 @@ through polkit.
 ## Tests
 
 ```bash
-tests/run.sh   # discover.py against a fake /sys; Model.js and Strings.js in Node; omarchy plugin validate
+tests/run.sh   # discover.py and the helper against a fake /sys, /proc and /run; Model.js and Strings.js in Node; omarchy plugin validate
 ```
 
 ## License
