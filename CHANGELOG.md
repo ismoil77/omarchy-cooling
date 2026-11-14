@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2
+
+- Max installs what it needs by itself: when the helper is missing or older than the widget needs
+  (its version is read from the helper file, readable without root), clicking Max opens the installer
+  — the password is the only thing to type — and Max turns on as soon as the helper is in place. No
+  command to run, no Install button. Gives up waiting after 3 minutes if the window is closed.
+
 ## 1.1.1
 
 - A clicked mode lights up at once and stays lit until the system shows it (powerprofilesctl returns

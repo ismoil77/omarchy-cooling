@@ -52,8 +52,15 @@ Panel {
   // Auto changes the mode only after its reason held for 20 s.
   property string pending: ""
   property real pendingSince: 0
-  property bool showInstall: false
-  property bool helperBroken: false
+  // The installed helper is the one this version needs (its file is readable by anyone).
+  property int helperVersion: 0
+  readonly property bool helperOk: helperVersion >= Model.HELPER_VERSION
+  // Max was clicked while the helper was missing or old: the installer is
+  // open, and Max turns on by itself once it is in place.
+  property bool maxAfterInstall: false
+  onMaxAfterInstallChanged: if (maxAfterInstall) installGiveUp.restart()
+  // The installer window closed without a password: stop waiting for it.
+  Timer { id: installGiveUp; interval: 180000; onTriggered: { root.maxAfterInstall = false; root.wanted = "" } }
   readonly property bool maxOn: pwmText.trim() === "0"
   readonly property string active: Model.profileFromPlatform(platformText, profiles.available) || profiles.active
   readonly property var modes: Model.modes(profiles.available, !!(found && found.maxFan))
@@ -119,6 +126,7 @@ Panel {
   FileView { id: platformFile; path: root.found && root.found.platform ? root.found.platform : ""; blockLoading: true }
   FileView { id: pwmFile; path: root.found && root.found.maxFan ? root.found.maxFan : ""; blockLoading: true }
   FileView { id: loadFile; path: "/proc/loadavg"; blockLoading: true }
+  FileView { id: helperFile; path: "/usr/local/libexec/ismoil-fans-max"; blockLoading: true; printErrors: false }
   FileView { id: onlineFile; path: "/sys/devices/system/cpu/online"; blockLoading: true; onLoaded: root.cpus = Model.cpuCount(text()) }
 
   function readAll(inst) {
@@ -147,6 +155,11 @@ Panel {
     if (pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
     loadFile.reload()
     load = parseFloat(loadFile.text()) || 0
+    if (found && found.maxFan) {
+      helperFile.reload()
+      helperVersion = Model.helperVersion(helperFile.text())
+      if (maxAfterInstall && helperOk) { maxAfterInstall = false; chooseMode("max") }
+    }
     if (opened && nvidia) readGpu()
     autoStep()
   }
@@ -169,10 +182,9 @@ Panel {
 
   // A button: Auto, a profile of this machine, or Max.
   function chooseMode(m) {
-    console.log("ismoil.fans: clicked", m, "helper", !!(found && found.helper))
-    showInstall = false
+    if (m !== "max") maxAfterInstall = false
     if (m === "max") {
-      if (!found || !found.helper) { showInstall = true; return }
+      if (!helperOk) { maxAfterInstall = true; wanted = "max"; installHelper(); return }
       wanted = "max"; wantedReset.restart()
       saveMode("manual")
       runHelper("max")
@@ -197,14 +209,13 @@ Panel {
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: helper:", text.trim()) }
     // Without an agent in reach polkit cannot ask: the rule from helper/install.sh is missing.
     onExited: function(code) {
-      if (code !== 0) { root.wanted = ""; root.helperBroken = true; root.showInstall = true }
+      // Failed (an old helper without the polkit rule): put the current one in place, then try again.
+      if (code !== 0 && !root.maxAfterInstall) { root.maxAfterInstall = true; root.helperVersion = 0; root.installHelper() }
       root.poll()
     }
   }
 
   function installHelper() {
-    showInstall = false
-    close()
     if (bar) bar.run("omarchy-launch-floating-terminal-with-presentation " + Model.shellQuote(root.localPath(Qt.resolvedUrl("helper/install.sh"))))
   }
 
@@ -526,7 +537,7 @@ Panel {
                   required property var modelData
                   look: skin
                   compact: true
-                  text: Model.modeLabel(root.cfg, modelData) + (modelData === "max" && !(root.found && root.found.helper) ? " 󰌾" : "")
+                  text: Model.modeLabel(root.cfg, modelData)
                   selected: root.selected === modelData
                   danger: modelData === "max" && root.maxOn
                   onClicked: root.chooseMode(modelData)
@@ -547,23 +558,14 @@ Panel {
             }
 
             Text {
-              visible: root.showInstall
+              visible: root.maxAfterInstall
               width: parent.width
               textFormat: Text.PlainText
-              text: root.helperBroken ? root.tr("helperUpdate") : root.tr("maxNeedsHelper")
-              color: skin.ink
+              text: root.tr("installing")
+              color: skin.warnText
               font.family: skin.fontFamily
               font.pixelSize: skin.small
               wrapMode: Text.WordWrap
-            }
-
-            Kit.ActionButton {
-              visible: root.showInstall
-              look: skin
-              primary: true
-              iconText: "󰏗"
-              text: root.helperBroken ? root.tr("helperUpdateButton") : root.tr("install")
-              onClicked: root.installHelper()
             }
           }
 

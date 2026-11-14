@@ -89,3 +89,10 @@ test("readings and discovery parsing", () => {
   const d = M.parseDiscovery('{"fans":[],"temps":[],"platform":"/p","maxFan":"/m","helper":true}')
   assert.deepEqual([d.platform, d.maxFan, d.helper], ["/p", "/m", true])
 })
+
+test("helper version read from the installed file", () => {
+  assert.equal(M.helperVersion("#!/bin/bash\n# helper-version: 2\n"), 2)
+  assert.equal(M.helperVersion("#!/bin/bash\n"), 0)
+  assert.equal(M.helperVersion(""), 0)
+  assert.ok(M.HELPER_VERSION >= 2)
+})
