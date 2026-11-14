@@ -11,6 +11,11 @@ human words:
   gpus      [{vendor, runtime}]                     discrete GPUs: runtime is the
             power/runtime_status file ("suspended" = asleep, do not wake it)
   profiles  bool                                    power-profiles-daemon is there
+  platform  path or null                            platform_profile: the mode in force,
+                                                    readable without root
+  maxFan    path or null                            hp-wmi pwm1_enable (0 = full speed,
+                                                    2 = auto), readable without root
+  helper    bool                                    the root helper for full speed is installed
 
   discover.py [SYSFS_ROOT]     (a fake /sys for tests)
 """
@@ -28,6 +33,8 @@ GROUPS = {
 # Not about cooling.
 SKIP = {"BAT0", "BAT1", "ADP1", "AC", "ucsi_source_psy_USBC000:001"}
 VENDORS = {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}
+# Installed by helper/install.sh; writes only "full speed" or "auto" to hp-wmi.
+HELPER = "/usr/local/libexec/ismoil-fans-max"
 
 
 def read(path):
@@ -100,7 +107,17 @@ def discover(root="/sys"):
             continue
         gpus.append({"vendor": vendor, "runtime": os.path.join(d, "power", "runtime_status")})
 
-    return {"fans": fans, "temps": temps, "gpus": gpus, "profiles": shutil.which("powerprofilesctl") is not None}
+    max_fan = None
+    for hw in hwmons:
+        d = os.path.join(base, hw)
+        if read(os.path.join(d, "name")) == "hp" and os.path.exists(os.path.join(d, "pwm1_enable")):
+            max_fan = os.path.join(d, "pwm1_enable")
+    platform = os.path.join(root, "firmware", "acpi", "platform_profile")
+    return {"fans": fans, "temps": temps, "gpus": gpus,
+            "profiles": shutil.which("powerprofilesctl") is not None,
+            "platform": platform if os.path.exists(platform) else None,
+            "maxFan": max_fan,
+            "helper": os.access(HELPER, os.X_OK)}
 
 
 if __name__ == "__main__":

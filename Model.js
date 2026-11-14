@@ -7,7 +7,6 @@
 
 var GROUP_ORDER = ["cpu", "gpu", "ssd", "board", "other"]
 var GROUP_KEYS = { cpu: "groupCpu", gpu: "groupGpu", ssd: "groupSsd", board: "groupBoard", other: "groupOther" }
-var PROFILES = ["power-saver", "balanced", "performance"]
 
 function config(raw) {
   return { lang: I18n.resolve(raw && raw.language, raw && raw.locale, Strings.langs, { "русский": "ru", english: "en" }) }
@@ -20,7 +19,10 @@ function parseDiscovery(raw) {
   var d
   try { d = JSON.parse(String(raw || "")) } catch (e) { return null }
   if (!d || !Array.isArray(d.fans) || !Array.isArray(d.temps)) return null
-  return { fans: d.fans, temps: d.temps, gpus: Array.isArray(d.gpus) ? d.gpus : [], profiles: d.profiles === true }
+  return { fans: d.fans, temps: d.temps, gpus: Array.isArray(d.gpus) ? d.gpus : [], profiles: d.profiles === true,
+           platform: typeof d.platform === "string" ? d.platform : null,
+           maxFan: typeof d.maxFan === "string" ? d.maxFan : null,
+           helper: d.helper === true }
 }
 
 // A sysfs number, or null for an empty or broken read.
@@ -98,16 +100,78 @@ function tooltip(cfg, cpu, fans) {
   return tr(cfg, "tipBar", { t: deg(cpu ? cpu.main : null), fans: headerSay(cfg, fans) })
 }
 
-// `powerprofilesctl list`: "* performance:" marks the active one.
+// `powerprofilesctl list`: "* performance:" marks the active one. Every
+// profile the daemon offers is kept, whatever this machine calls it.
 function parseProfiles(text) {
   var out = { active: "", available: [] }
   var lines = String(text || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
-    var m = lines[i].match(/^(\*?)\s*([a-z-]+):\s*$/)
-    if (!m || PROFILES.indexOf(m[2]) < 0) continue
+    var m = lines[i].match(/^(\*?)\s*([a-z][a-z-]*):\s*$/)
+    if (!m) continue
     out.available.push(m[2])
     if (m[1] === "*") out.active = m[2]
   }
-  out.available.sort(function(a, b) { return PROFILES.indexOf(a) - PROFILES.indexOf(b) })
+  // Quietest first: the daemon lists them loudest first.
+  out.available.sort(function(a, b) { return rank(a) - rank(b) })
   return out
 }
+
+// Known names from quiet to loud; an unknown one goes in the middle.
+var RANK = { "cool": 0, "low-power": 1, "power-saver": 1, "quiet": 1, "balanced": 2, "balanced-performance": 3, "performance": 4 }
+function rank(name) { return RANK[name] !== undefined ? RANK[name] : 2.5 }
+
+// The words for a mode; a name nobody taught us is shown as the system says it.
+var LABELS = { "cool": "modeCool", "low-power": "modeQuiet", "power-saver": "modeQuiet", "quiet": "modeQuiet",
+               "balanced": "modeBalanced", "balanced-performance": "modeBalancedPerf", "performance": "modePerformance",
+               "auto": "modeAuto", "max": "modeMax" }
+function modeLabel(cfg, name) {
+  return LABELS[name] ? tr(cfg, LABELS[name]) : String(name).charAt(0).toUpperCase() + String(name).slice(1)
+}
+
+// The buttons this machine can have: Auto when there are two profiles to
+// choose between, every profile, Max when a full-speed switch exists.
+function modes(available, hasMax) {
+  var out = available.length >= 2 ? ["auto"] : []
+  out = out.concat(available)
+  if (hasMax) out.push("max")
+  return out
+}
+
+// platform_profile (readable without root) -> the daemon's name for it.
+function profileFromPlatform(text, available) {
+  var p = String(text || "").trim()
+  if (!p) return ""
+  if (available.indexOf(p) >= 0) return p
+  var quiet = { "quiet": 1, "low-power": 1, "cool": 1 }
+  if (quiet[p]) return available.filter(function(a) { return rank(a) <= 1 })[0] || ""
+  if (p === "balanced-performance") return available.indexOf("balanced") >= 0 ? "balanced" : ""
+  return ""
+}
+
+// Auto: the quietest profile while the computer rests, the middle one while it
+// works, never the loudest. null = no reason to change.
+//   cpu: degrees, load: 1-minute load average, cpus: how many
+function autoTarget(cpu, load, cpus, available) {
+  if (available.length < 2) return null
+  var quiet = available[0]
+  var busyOne = available.indexOf("balanced") >= 0 ? "balanced" : available[Math.min(1, available.length - 1)]
+  var share = cpus > 0 ? load / cpus : 0
+  if (share > 0.5 || (cpu !== null && cpu >= 70)) return busyOne
+  if (share < 0.25 && (cpu === null || cpu < 60)) return quiet
+  return null
+}
+
+// /sys/devices/system/cpu/online "0-15" or "0,2-5" -> how many.
+function cpuCount(text) {
+  var n = 0
+  var parts = String(text || "").trim().split(",")
+  for (var i = 0; i < parts.length; i++) {
+    var r = parts[i].split("-").map(Number)
+    if (r.length === 2 && isFinite(r[0]) && isFinite(r[1])) n += r[1] - r[0] + 1
+    else if (r.length === 1 && isFinite(r[0]) && parts[i] !== "") n += 1
+  }
+  return n
+}
+
+// POSIX single-quoting: any string becomes one shell word.
+function shellQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }

@@ -40,6 +40,17 @@ class Discover(unittest.TestCase):
         self.assertIsNone(temps["nvme"]["crit"])                  # 65261 °C is a placeholder
         self.assertEqual([g["vendor"] for g in d["gpus"]], ["nvidia"])
         self.assertTrue(d["gpus"][0]["runtime"].endswith("0000:01:00.0/power/runtime_status"))
+        self.assertIsNone(d["platform"])
+        self.assertIsNone(d["maxFan"])
+        self.assertIn("helper", d)
+
+    def test_hp_full_speed_switch_and_platform_profile(self):
+        root = self.sysfs()
+        put(root, "class/hwmon/hwmon5/pwm1_enable", "2\n")
+        put(root, "firmware/acpi/platform_profile", "balanced\n")
+        d = discover.discover(root)
+        self.assertTrue(d["maxFan"].endswith("hwmon5/pwm1_enable"))
+        self.assertTrue(d["platform"].endswith("firmware/acpi/platform_profile"))
 
     def test_acpi_fan_alone_still_counts(self):
         root = tempfile.mkdtemp()

@@ -43,6 +43,21 @@ Panel {
   property real gpuTemp: -1
   property bool gpuAsleep: false
   property var profiles: ({ active: "", available: [] })
+  // "auto" (the widget picks quiet or medium) or "manual" (what was clicked stays).
+  readonly property string modeSetting: String(setting("mode", "auto"))
+  property string platformText: ""
+  property string pwmText: ""
+  property real load: 0
+  property int cpus: 0
+  // Auto changes the mode only after its reason held for 20 s.
+  property string pending: ""
+  property real pendingSince: 0
+  property bool showInstall: false
+  readonly property bool maxOn: pwmText.trim() === "0"
+  readonly property string active: Model.profileFromPlatform(platformText, profiles.available) || profiles.active
+  readonly property var modes: Model.modes(profiles.available, !!(found && found.maxFan))
+  readonly property string selected: maxOn ? "max"
+    : modeSetting === "auto" && modes.indexOf("auto") >= 0 ? "auto" : active
 
   readonly property var tempGroups: Model.groups(found ? found.temps : [], tempValues)
   readonly property var cpu: tempGroups.filter(function(g) { return g.group === "cpu" })[0] || tempGroups[0] || null
@@ -72,7 +87,7 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var d = Model.parseDiscovery(text)
-        if (d) { root.found = d; Qt.callLater(root.poll) }
+        if (d) { root.found = d; root.readProfiles(); Qt.callLater(root.poll) }
       }
     }
   }
@@ -89,6 +104,12 @@ Panel {
     delegate: FileView { required property var modelData; path: modelData.path; blockLoading: true }
   }
   FileView { id: gpuRuntimeFile; path: root.nvidia ? root.nvidia.runtime : ""; blockLoading: true }
+  // The mode in force and the full-speed switch: readable by anyone, so the
+  // popup always shows what is true, whoever changed it.
+  FileView { id: platformFile; path: root.found && root.found.platform ? root.found.platform : ""; blockLoading: true }
+  FileView { id: pwmFile; path: root.found && root.found.maxFan ? root.found.maxFan : ""; blockLoading: true }
+  FileView { id: loadFile; path: "/proc/loadavg"; blockLoading: true }
+  FileView { id: onlineFile; path: "/sys/devices/system/cpu/online"; blockLoading: true; onLoaded: root.cpus = Model.cpuCount(text()) }
 
   function readAll(inst) {
     var out = []
@@ -112,7 +133,62 @@ Panel {
       if (v !== null && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
     }
     if (changed) peaks = p
+    if (platformFile.path !== "") { platformFile.reload(); platformText = platformFile.text() }
+    if (pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
+    loadFile.reload()
+    load = parseFloat(loadFile.text()) || 0
     if (opened && nvidia) readGpu()
+    autoStep()
+  }
+
+  // Auto: quiet while the computer rests, medium while it works, never the
+  // loudest; a change only after its reason held for 20 s.
+  function autoStep() {
+    if (selected !== "auto" || setProc.running) { pending = ""; return }
+    var target = Model.autoTarget(cpu ? cpu.main : null, load, cpus, profiles.available)
+    if (!target || target === active) { pending = ""; return }
+    if (pending !== target) { pending = target; pendingSince = Date.now(); return }
+    if (Date.now() - pendingSince >= 20000) { pending = ""; setProfile(target) }
+  }
+
+  function saveMode(value) {
+    settings = Object.assign({}, settings, { mode: value })
+    if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
+      bar.shell.updateEntryInline(moduleName, settings)
+  }
+
+  // A button: Auto, a profile of this machine, or Max.
+  function chooseMode(m) {
+    showInstall = false
+    if (m === "max") {
+      if (!found || !found.helper) { showInstall = true; return }
+      saveMode("manual")
+      runHelper("max")
+      if (profiles.available.indexOf("performance") >= 0) setProfile("performance")
+      return
+    }
+    if (maxOn) runHelper("auto")
+    if (m === "auto") { saveMode("auto"); pending = ""; Qt.callLater(poll); return }
+    saveMode("manual")
+    setProfile(m)
+  }
+
+  function runHelper(arg) {
+    if (helperProc.running) return
+    helperProc.command = ["pkexec", "/usr/local/libexec/ismoil-fans-max", arg]
+    helperProc.running = true
+  }
+
+  Process {
+    id: helperProc
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: helper:", text.trim()) }
+    onExited: Qt.callLater(root.poll)
+  }
+
+  function installHelper() {
+    showInstall = false
+    close()
+    if (bar) bar.run("omarchy-launch-floating-terminal-with-presentation " + Model.shellQuote(root.localPath(Qt.resolvedUrl("helper/install.sh"))))
   }
 
   // The discrete GPU only while open, and only when it is awake: asking a
@@ -147,16 +223,17 @@ Panel {
   // powerprofilesctl says itself whether the mode exists: an instance that
   // never opened (the bar on another monitor) has no list yet and must still work.
   function setProfile(name) {
-    if (Model.PROFILES.indexOf(name) < 0) return
+    if (profiles.available.length > 0 && profiles.available.indexOf(name) < 0) return
     profiles = Object.assign({}, profiles, { active: name })
     setProc.command = ["powerprofilesctl", "set", name]
     setProc.running = true
   }
 
+  // Right click: the next mode, Max left out (it may ask for a password).
   function nextProfile() {
-    var list = profiles.available
+    var list = modes.filter(function(m) { return m !== "max" })
     if (list.length === 0) return
-    setProfile(list[(list.indexOf(profiles.active) + 1) % list.length])
+    chooseMode(list[(list.indexOf(selected) + 1) % list.length])
   }
 
   Process {
@@ -192,8 +269,13 @@ Panel {
     function open(): void { root.open() }
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function mode(name: string): void { root.setProfile(name) }
+    function mode(name: string): void { root.chooseMode(name) }
     function nextMode(): void { root.nextProfile() }
+    // What the widget sees, for checking it without opening the popup.
+    function state(): string {
+      return JSON.stringify({ modes: root.modes, selected: root.selected, active: root.active, maxOn: root.maxOn,
+                              mode: root.modeSetting, cpu: root.cpu ? Math.round(root.cpu.main) : null, load: root.load, cpus: root.cpus })
+    }
   }
 
   // ---------- bar ----------
@@ -241,7 +323,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r") discoverProc.running = true
-        else if (t >= "1" && t <= "3") root.setProfile(Model.PROFILES[Number(t) - 1])
+        else if (t >= "1" && t <= "9" && Number(t) <= root.modes.length) root.chooseMode(root.modes[Number(t) - 1])
       }
 
       Flickable {
@@ -393,28 +475,74 @@ Panel {
             }
           }
 
-          // ---------- Power mode (power-profiles-daemon, no root) ----------
+          // ---------- Mode: whatever this computer offers ----------
           Kit.Section {
-            visible: root.profiles.available.length > 0
+            visible: root.found !== null
             width: parent.width
             look: skin
             caption: root.tr("sectionMode")
-            hint: root.tr("modeHint")
+            hint: root.modes.length > 0 ? root.tr("modeHint") : ""
 
-            Kit.ActionRow {
+            Text {
+              visible: root.modes.length === 0
               width: parent.width
+              textFormat: Text.PlainText
+              text: root.tr("noModes")
+              color: skin.dim
+              font.family: skin.fontFamily
+              font.pixelSize: skin.small
+              wrapMode: Text.WordWrap
+            }
+
+            Flow {
+              visible: root.modes.length > 0
+              width: parent.width
+              spacing: Style.space(6)
 
               Repeater {
-                model: root.profiles.available
+                model: root.modes
                 delegate: Kit.ActionButton {
                   required property var modelData
                   look: skin
                   compact: true
-                  text: root.tr(modelData)
-                  selected: root.profiles.active === modelData
-                  onClicked: root.setProfile(modelData)
+                  text: Model.modeLabel(root.cfg, modelData) + (modelData === "max" && !(root.found && root.found.helper) ? " 󰌾" : "")
+                  selected: root.selected === modelData
+                  danger: modelData === "max" && root.maxOn
+                  onClicked: root.chooseMode(modelData)
                 }
               }
+            }
+
+            Text {
+              visible: text !== ""
+              width: parent.width
+              textFormat: Text.PlainText
+              text: root.maxOn ? root.tr("maxNow")
+                  : root.selected === "auto" && root.active !== "" ? root.tr("autoNow", { mode: Model.modeLabel(root.cfg, root.active).toLowerCase() }) : ""
+              color: root.maxOn ? skin.badText : skin.dim
+              font.family: skin.fontFamily
+              font.pixelSize: skin.small
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              visible: root.showInstall
+              width: parent.width
+              textFormat: Text.PlainText
+              text: root.tr("maxNeedsHelper")
+              color: skin.ink
+              font.family: skin.fontFamily
+              font.pixelSize: skin.small
+              wrapMode: Text.WordWrap
+            }
+
+            Kit.ActionButton {
+              visible: root.showInstall
+              look: skin
+              primary: true
+              iconText: "󰏗"
+              text: root.tr("install")
+              onClicked: root.installHelper()
             }
           }
 

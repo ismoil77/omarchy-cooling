@@ -1,0 +1,18 @@
+#!/bin/bash
+# Root helper of the Cooling widget: fans at full speed, or back to automatic.
+# It does nothing else, takes no path and no number from its caller.
+#   ismoil-fans-max max | auto
+set -eu
+case "${1:-}" in
+  max) value=0 ;;   # hp-wmi: 0 = full speed
+  auto) value=2 ;;  # hp-wmi: 2 = the firmware's own curve
+  *) echo "usage: ismoil-fans-max max|auto" >&2; exit 2 ;;
+esac
+# The hwmon number changes between boots: find the one hp-wmi registers.
+for d in /sys/class/hwmon/hwmon*; do
+  [ "$(cat "$d/name" 2>/dev/null)" = hp ] && [ -e "$d/pwm1_enable" ] || continue
+  printf '%s' "$value" > "$d/pwm1_enable"
+  exit 0
+done
+echo "ismoil-fans-max: no hp-wmi fan control on this machine" >&2
+exit 1

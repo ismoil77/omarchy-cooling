@@ -13,14 +13,31 @@ and a popup with every fan the kernel reports and its speed, temperatures by gro
 - **Temperatures**: processor (package and the hottest core), graphics, SSD, board.
   A discrete NVIDIA GPU is read with `nvidia-smi` only while the popup is open, and only when it is
   awake: a sleeping GPU is never woken (that would drain the battery).
-- **Power mode**: Quiet / Balanced / Performance through power-profiles-daemon — no root.
-  Right click on the bar steps through them.
+- **Modes — whatever this computer offers**, never a fixed list:
+  - every profile power-profiles-daemon has (no root), quietest first, with plain names
+    (power-saver → Quiet, balanced → Medium, performance → Powerful; an unknown name as it is);
+  - **Auto** (the default, when there are two or more): the quietest profile while the computer rests,
+    medium while it works (load or 70°+), never the loudest; it changes only after its reason held 20 s;
+  - **Max**, only where a full-speed fan switch exists (hp-wmi today): fans at full speed. It needs a
+    one-time install of a root helper — the widget offers it, nothing is installed until you click
+    *Install* and type your password. Fans go back to automatic at every boot.
+  - The mode shown is read from `platform_profile`, so it is always the one in force.
+  - Right click on the bar steps through the modes (Max left out).
 - Colours: cool, warm from 75°, hot near the processor's limit (or 90°).
 
 ## Light on the system
 
 `discover.py` finds the sensors once (and when the popup opens); after that the sensor files are
 re-read in place every `interval` seconds, with no process.
+
+## The Max helper (optional)
+
+`helper/install.sh` puts three files in place (and `helper/install.sh remove` takes them out):
+
+- `/usr/local/libexec/ismoil-fans-max` — writes `0` (full speed) or `2` (auto) to hp-wmi's
+  `pwm1_enable`; it takes no path or number from its caller;
+- a polkit action for it, `auth_admin_keep` (your password once per session);
+- `ismoil-fans-auto.service`, which sets the fans back to automatic at boot.
 
 ## Install
 
@@ -50,7 +67,8 @@ Nothing is left behind.
 ## Requirements
 
 `python3` (stdlib only). Optional: `power-profiles-daemon` for the mode switch, `nvidia-smi` for an
-NVIDIA GPU. The widget never writes to `/sys` and needs no root.
+NVIDIA GPU. The widget itself never writes to `/sys` and needs no root; only the optional helper does,
+through polkit.
 
 ## Tests
 

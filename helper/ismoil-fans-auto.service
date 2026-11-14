@@ -1,0 +1,9 @@
+[Unit]
+Description=Fans back to automatic at boot (Cooling widget)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/ismoil-fans-max auto
+
+[Install]
+WantedBy=multi-user.target
