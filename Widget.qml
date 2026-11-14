@@ -52,9 +52,13 @@ Panel {
   // Auto changes the mode only after its reason held for 20 s.
   property string pending: ""
   property real pendingSince: 0
-  // The installed helper is the one this version needs (its file is readable by anyone).
-  property int helperVersion: 0
-  readonly property bool helperOk: helperVersion >= Model.HELPER_VERSION
+  // Any installed helper is used: a newer widget never asks for the password
+  // again just because the helper got a new version. Only a missing helper,
+  // or one that just failed (`helperFailed` holds its text until the file
+  // changes), is installed anew.
+  property string helperText: ""
+  property string helperFailed: ""
+  readonly property bool helperOk: helperText.indexOf("ismoil-fans-max") >= 0 && helperText !== helperFailed
   // Max was clicked while the helper was missing or old: the installer is
   // open, and Max turns on by itself once it is in place.
   property bool maxAfterInstall: false
@@ -158,7 +162,7 @@ Panel {
     load = parseFloat(loadFile.text()) || 0
     if (found && found.maxFan) {
       helperFile.reload()
-      helperVersion = Model.helperVersion(helperFile.text())
+      helperText = helperFile.text()
       if (maxAfterInstall && helperOk) { maxAfterInstall = false; chooseMode("max") }
     }
     if (opened && nvidia) readGpu()
@@ -211,7 +215,7 @@ Panel {
     // Without an agent in reach polkit cannot ask: the rule from helper/install.sh is missing.
     onExited: function(code) {
       // Failed (an old helper without the polkit rule): put the current one in place, then try again.
-      if (code !== 0 && !root.maxAfterInstall) { root.maxAfterInstall = true; root.helperVersion = 0; root.installHelper() }
+      if (code !== 0 && !root.maxAfterInstall) { root.helperFailed = root.helperText; root.maxAfterInstall = true; root.installHelper() }
       root.poll()
     }
   }

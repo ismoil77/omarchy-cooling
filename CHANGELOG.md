@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Max never asks for the password again because of a helper version: any installed helper is used,
+  and only a missing one, or one that just failed, is installed anew.
+- Manifest description within the marketplace's 500 characters (a test keeps it there).
+
 ## 1.2.0
 
 - Max on any machine the helper knows: every hwmon fan (hp-wmi, asus-wmi, dell-smm, nct6775, it87 …)

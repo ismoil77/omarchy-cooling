@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "ismoil.fans",
   "name": "Cooling",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "ismoil",
   "license": "MIT",
-  "description": "Fans and temperatures for any machine: the processor's temperature in the bar, coloured as it heats; a popup with every fan the kernel reports (hwmon: hp-wmi, thinkpad, asus, dell, nct, it87…) and its speed, temperatures by group — processor, graphics, SSD, board — and the power modes this computer offers (power-profiles-daemon, no root) plus Auto — quiet at rest, medium at work — and Max (full fan speed on hwmon laptops and boards, ThinkPad and MSI, through an optional root helper the widget installs on the first click). Says so when Linux sees no fan. Reads sensor files in place: no background processes; a sleeping discrete GPU is never woken. English and Russian.",
+  "description": "Fans and temperatures for any machine: processor temperature in the bar, coloured as it heats; a popup with every fan hwmon reports and its speed, temperatures by group, and the power modes this computer offers plus Auto (quiet at rest, medium at work) and Max (full fan speed through an optional root helper). Says so when Linux sees no fan. No background processes; a sleeping GPU is never woken. English and Russian.",
   "kinds": [
     "bar-widget"
   ],

@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import fs from "node:fs"
 import { load } from "./loader.mjs"
 
 const M = load("Model.js")
@@ -90,9 +91,8 @@ test("readings and discovery parsing", () => {
   assert.deepEqual([d.platform, d.maxFan, d.helper], ["/p", "/m", true])
 })
 
-test("helper version read from the installed file", () => {
-  assert.equal(M.helperVersion("#!/bin/bash\n# helper-version: 2\n"), 2)
-  assert.equal(M.helperVersion("#!/bin/bash\n"), 0)
-  assert.equal(M.helperVersion(""), 0)
-  assert.ok(M.HELPER_VERSION >= 2)
+test("the manifest fits the marketplace limits", () => {
+  const m = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url)))
+  assert.ok(m.description.length <= 500, "description " + m.description.length)
+  assert.ok(m.name.length <= 120)
 })
