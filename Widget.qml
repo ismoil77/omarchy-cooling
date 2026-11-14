@@ -298,13 +298,15 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
 
                   // Spins at a pace that follows the speed, only while it is seen.
-                  Text {
+                  Kit.Glyph {
                     id: blade
-                    textFormat: Text.PlainText
+                    // Centred on its ink, so it spins in place instead of wobbling.
+                    width: 2 * Math.round(skin.strong * 0.7)
+                    height: width
                     text: root.icon
                     color: skin.accentText
-                    font.family: skin.fontFamily
-                    font.pixelSize: skin.strong
+                    fontFamily: skin.fontFamily
+                    pixelSize: 2 * Math.round(skin.strong / 2)
                     anchors.verticalCenter: parent.verticalCenter
                     RotationAnimator on rotation {
                       running: root.opened && skin.motion && modelData.rpm > 0
