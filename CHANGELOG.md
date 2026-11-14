@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.2
+
+- A landscape banner as the marketplace preview (the card crops a strip from the centre, a tall popup
+  screenshot showed only its blurred top); a shorter description that says what the widget is first;
+  the README shows the popup in both languages.
+
 ## 1.3.1
 
 - Security (marketplace review), helper 5: the root helper sets its own `umask 022` and `PATH`; its

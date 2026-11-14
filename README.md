@@ -5,7 +5,11 @@
 Fans and temperatures for any machine: the processor's temperature in the bar, coloured as it heats,
 and a popup with every fan the kernel reports and its speed, temperatures by group, and the power mode.
 
-![preview](preview.png)
+![Cooling](preview.png)
+
+| English | Русский |
+|---|---|
+| ![the popup](docs/preview-en.png) | ![окно](docs/preview-ru.png) |
 
 - **Fans**: every `fanN_input` hwmon reports (hp-wmi, thinkpad_acpi, asus-wmi, dell-smm, nct6775,
   it87, acpi_fan…), their speed against the fastest one, a spinning icon while the popup is open.
