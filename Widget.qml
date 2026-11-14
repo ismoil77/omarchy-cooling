@@ -135,7 +135,7 @@ Panel {
 
   // ---------- power mode ----------
   function readProfiles() {
-    if (found && found.profiles && !profilesProc.running) profilesProc.running = true
+    if (!profilesProc.running) profilesProc.running = true
   }
 
   Process {
@@ -144,8 +144,10 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.profiles = Model.parseProfiles(text) }
   }
 
+  // powerprofilesctl says itself whether the mode exists: an instance that
+  // never opened (the bar on another monitor) has no list yet and must still work.
   function setProfile(name) {
-    if (profiles.available.indexOf(name) < 0 || setProc.running) return
+    if (Model.PROFILES.indexOf(name) < 0) return
     profiles = Object.assign({}, profiles, { active: name })
     setProc.command = ["powerprofilesctl", "set", name]
     setProc.running = true
@@ -157,7 +159,11 @@ Panel {
     setProfile(list[(list.indexOf(profiles.active) + 1) % list.length])
   }
 
-  Process { id: setProc; onExited: root.readProfiles() }
+  Process {
+    id: setProc
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: powerprofilesctl:", text.trim()) }
+    onExited: function(code) { if (code !== 0) console.warn("ismoil.fans: powerprofilesctl set failed", code); root.readProfiles() }
+  }
 
   // ---------- timers ----------
   Timer {
