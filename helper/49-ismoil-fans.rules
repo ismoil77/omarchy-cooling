@@ -1,0 +1,9 @@
+// The Cooling widget runs inside the user's systemd manager, outside the
+// login session, so polkit finds no agent there to ask for a password. An
+// administrator (wheel) may run this one helper — it can only set the fans to
+// full speed or back to automatic — without one.
+polkit.addRule(function(action, subject) {
+  if (action.id == "io.github.ismoil77.fans.max" && subject.isInGroup("wheel")) {
+    return polkit.Result.YES;
+  }
+});

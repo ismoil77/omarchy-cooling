@@ -36,7 +36,8 @@ re-read in place every `interval` seconds, with no process.
 
 - `/usr/local/libexec/ismoil-fans-max` — writes `0` (full speed) or `2` (auto) to hp-wmi's
   `pwm1_enable`; it takes no path or number from its caller;
-- a polkit action for it, `auth_admin_keep` (your password once per session);
+- a polkit action for it, and a rule letting administrators (`wheel`) run this one helper without a
+  password: the shell runs outside the login session, where polkit has no agent to ask one;
 - `ismoil-fans-auto.service`, which sets the fans back to automatic at boot.
 
 ## Install

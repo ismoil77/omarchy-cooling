@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1
+
+- A clicked mode lights up at once and stays lit until the system shows it (powerprofilesctl returns
+  before the profile is applied, so the popup used to show the previous mode — one step behind).
+- Max works from the shell: the shell runs in the user's systemd manager, outside the login session,
+  where polkit has no agent to ask for a password. `helper/install.sh` adds a polkit rule letting wheel
+  users run this one helper (full speed or automatic only) without one. When Max fails, the popup
+  offers to update the helper.
+
 ## 1.1.0
 
 - Modes are whatever this computer offers (any power-profiles-daemon profile, quietest first),

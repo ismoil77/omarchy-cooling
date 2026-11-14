@@ -53,11 +53,21 @@ Panel {
   property string pending: ""
   property real pendingSince: 0
   property bool showInstall: false
+  property bool helperBroken: false
   readonly property bool maxOn: pwmText.trim() === "0"
   readonly property string active: Model.profileFromPlatform(platformText, profiles.available) || profiles.active
   readonly property var modes: Model.modes(profiles.available, !!(found && found.maxFan))
-  readonly property string selected: maxOn ? "max"
+  // The button just clicked shows at once; the system's answer replaces it
+  // as soon as it is read (at the latest after 6 s).
+  property string wanted: ""
+  readonly property string fromSystem: maxOn ? "max"
     : modeSetting === "auto" && modes.indexOf("auto") >= 0 ? "auto" : active
+  readonly property string selected: wanted !== "" ? wanted : fromSystem
+  // The system applies a mode a moment after the command returns: the click
+  // stays lit until the system shows the same.
+  onFromSystemChanged: if (fromSystem === wanted) wanted = ""
+
+  Timer { id: wantedReset; interval: 6000; onTriggered: root.wanted = "" }
 
   readonly property var tempGroups: Model.groups(found ? found.temps : [], tempValues)
   readonly property var cpu: tempGroups.filter(function(g) { return g.group === "cpu" })[0] || tempGroups[0] || null
@@ -159,15 +169,18 @@ Panel {
 
   // A button: Auto, a profile of this machine, or Max.
   function chooseMode(m) {
+    console.log("ismoil.fans: clicked", m, "helper", !!(found && found.helper))
     showInstall = false
     if (m === "max") {
       if (!found || !found.helper) { showInstall = true; return }
+      wanted = "max"; wantedReset.restart()
       saveMode("manual")
       runHelper("max")
       if (profiles.available.indexOf("performance") >= 0) setProfile("performance")
       return
     }
     if (maxOn) runHelper("auto")
+    wanted = m; wantedReset.restart()
     if (m === "auto") { saveMode("auto"); pending = ""; Qt.callLater(poll); return }
     saveMode("manual")
     setProfile(m)
@@ -182,7 +195,11 @@ Panel {
   Process {
     id: helperProc
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: helper:", text.trim()) }
-    onExited: Qt.callLater(root.poll)
+    // Without an agent in reach polkit cannot ask: the rule from helper/install.sh is missing.
+    onExited: function(code) {
+      if (code !== 0) { root.wanted = ""; root.helperBroken = true; root.showInstall = true }
+      root.poll()
+    }
   }
 
   function installHelper() {
@@ -239,12 +256,16 @@ Panel {
   Process {
     id: setProc
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: if (text.trim() !== "") console.warn("ismoil.fans: powerprofilesctl:", text.trim()) }
-    onExited: function(code) { if (code !== 0) console.warn("ismoil.fans: powerprofilesctl set failed", code); root.readProfiles() }
+    onExited: function(code) {
+      if (code !== 0) console.warn("ismoil.fans: powerprofilesctl set failed", code)
+      if (code !== 0) root.wanted = ""
+      root.readProfiles()
+    }
   }
 
   // ---------- timers ----------
   Timer {
-    interval: root.opened ? Math.min(2000, root.pollSeconds * 1000) : root.pollSeconds * 1000
+    interval: root.wanted !== "" ? 500 : root.opened ? Math.min(2000, root.pollSeconds * 1000) : root.pollSeconds * 1000
     running: root.found !== null
     repeat: true
     onTriggered: root.poll()
@@ -529,7 +550,7 @@ Panel {
               visible: root.showInstall
               width: parent.width
               textFormat: Text.PlainText
-              text: root.tr("maxNeedsHelper")
+              text: root.helperBroken ? root.tr("helperUpdate") : root.tr("maxNeedsHelper")
               color: skin.ink
               font.family: skin.fontFamily
               font.pixelSize: skin.small
@@ -541,7 +562,7 @@ Panel {
               look: skin
               primary: true
               iconText: "󰏗"
-              text: root.tr("install")
+              text: root.helperBroken ? root.tr("helperUpdateButton") : root.tr("install")
               onClicked: root.installHelper()
             }
           }

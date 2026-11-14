@@ -40,6 +40,8 @@ var en = {
   maxNow: "Fans at full speed",
   maxNeedsHelper: "Max needs a one-time install of a small helper (asks for your password).",
   install: "Install",
+  helperUpdate: "Max could not ask for your password here. Update the helper once (asks for your password), then Max works without one.",
+  helperUpdateButton: "Update the helper",
   noModes: "This computer offers no power modes",
   tipBar: "Cooling: processor {t} · {fans}",
   sensors: "Sensors"
@@ -83,6 +85,8 @@ var ru = {
   maxNow: "Вентиляторы на полную",
   maxNeedsHelper: "Для максимума нужна разовая установка маленького помощника (спросит пароль).",
   install: "Установить",
+  helperUpdate: "Максимум не смог спросить пароль отсюда. Обнови помощника один раз (спросит пароль), дальше максимум работает без пароля.",
+  helperUpdateButton: "Обновить помощника",
   noModes: "Этот компьютер не даёт выбирать режим",
   tipBar: "Охлаждение: процессор {t} · {fans}",
   sensors: "Датчики"
