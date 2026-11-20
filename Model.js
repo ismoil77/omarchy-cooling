@@ -10,6 +10,19 @@ var GROUP_KEYS = { cpu: "groupCpu", gpu: "groupGpu", ssd: "groupSsd", board: "gr
 var GPU_DRIVERS = { amdgpu: 1, nouveau: 1, radeon: 1, i915: 1, xe: 1 }
 var MAX_PLAUSIBLE_RPM = 30000
 var DEFAULT_TACH_MAX = 5000
+var TACH_MODES = ["both", "gauge", "rpm", "off"]
+var RPM_FORMATS = ["full", "compact", "padded"]
+var TACH_SCALES = [0, 3500, 5000, 6500, 8000]
+var TACH_COLOR_NAMES = ["auto", "thermal", "accent", "green", "cyan", "blue", "yellow", "orange", "red", "magenta"]
+var TACH_COLOR_FALLBACKS = {
+  green: "#66bb6a",
+  cyan: "#26c6da",
+  blue: "#42a5f5",
+  yellow: "#eab308",
+  orange: "#fb923c",
+  red: "#ef4444",
+  magenta: "#c084fc"
+}
 
 function config(raw) {
   return { lang: I18n.resolve(raw && raw.language, raw && raw.locale, Strings.langs, { "русский": "ru", english: "en" }) }
@@ -108,7 +121,7 @@ function fanRows(cfg, fans, values, peaks) {
 
 // Primary fan for the bar tachometer: prefers non-GPU fans, then CPU/Processor labels,
 // then currently active fans, keeping a stable earliest-index choice on ties.
-function primaryFan(fans, values, peaks) {
+function primaryFan(fans, values, peaks, customMax) {
   if (!Array.isArray(fans) || !Array.isArray(values)) return null
   var bestIdx = -1
   var bestScore = -1
@@ -126,7 +139,8 @@ function primaryFan(fans, values, peaks) {
   if (bestIdx < 0) return null
   var chosen = fans[bestIdx]
   var chosenRpm = values[bestIdx]
-  var ceiling = fanCeiling(chosen, chosenRpm, peaks, DEFAULT_TACH_MAX)
+  var overrideMax = tachMaxValue(customMax)
+  var ceiling = overrideMax > 0 ? overrideMax : fanCeiling(chosen, chosenRpm, peaks, DEFAULT_TACH_MAX)
   return {
     rpm: chosenRpm,
     max: ceiling,
@@ -134,6 +148,51 @@ function primaryFan(fans, values, peaks) {
     label: chosen && chosen.label ? chosen.label : null,
     driver: chosen && chosen.driver ? chosen.driver : ""
   }
+}
+
+function tachMode(raw) {
+  if (raw === false || raw === "off" || raw === "none") return "off"
+  if (raw === "gauge" || raw === "dial") return "gauge"
+  if (raw === "rpm" || raw === "text") return "rpm"
+  return "both"
+}
+
+function rpmFormat(raw) {
+  var s = String(raw || "").toLowerCase()
+  if (s === "compact" || s === "short") return "compact"
+  if (s === "padded" || s === "fixed") return "padded"
+  return "full"
+}
+
+function tachMaxValue(raw) {
+  var n = Number(raw)
+  return isFinite(n) && n > 0 && n < MAX_PLAUSIBLE_RPM ? Math.round(n) : 0
+}
+
+function boolSetting(raw, fallback) {
+  if (raw === true || raw === false) return raw
+  if (typeof raw === "string") {
+    var s = raw.trim().toLowerCase()
+    if (s === "true" || s === "1" || s === "yes" || s === "on") return true
+    if (s === "false" || s === "0" || s === "no" || s === "off") return false
+  }
+  return fallback
+}
+
+function formatRpmNumber(rpm, format) {
+  if (!validRpm(rpm)) return "—"
+  var n = Math.round(rpm)
+  var fmt = rpmFormat(format)
+  if (fmt === "compact") return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n)
+  var s = String(n)
+  if (fmt === "padded") while (s.length < 4) s = "0" + s
+  return s
+}
+
+function formatBarRpm(cfg, rpm, format, showUnit) {
+  var num = formatRpmNumber(rpm, format)
+  if (num === "—") return num
+  return showUnit === false ? num : tr(cfg, "rpm", { n: num })
 }
 
 function groupLabel(cfg, g) { return tr(cfg, GROUP_KEYS[g] || "groupOther") }

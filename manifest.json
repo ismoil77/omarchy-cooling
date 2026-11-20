@@ -24,7 +24,12 @@
       "textSize": "Normal",
       "animations": true,
       "mode": "auto",
-      "tachometer": true
+      "tachometer": "both",
+      "tachColor": "auto",
+      "rpmFormat": "full",
+      "rpmUnit": true,
+      "barDivider": false,
+      "tachMax": 0
     },
     "schema": [
       {
@@ -64,10 +69,71 @@
       },
       {
         "key": "tachometer",
-        "type": "boolean",
+        "type": "enum",
         "label": "Bar tachometer",
+        "options": [
+          "both",
+          "gauge",
+          "rpm",
+          "off"
+        ],
+        "defaultValue": "both",
+        "description": "Show the main fan beside the temperature in the bar: dial + RPM, dial only, RPM only, or off."
+      },
+      {
+        "key": "tachColor",
+        "type": "enum",
+        "label": "Tachometer color",
+        "options": [
+          "auto",
+          "thermal",
+          "accent",
+          "green",
+          "cyan",
+          "blue",
+          "yellow",
+          "orange",
+          "red",
+          "magenta"
+        ],
+        "defaultValue": "auto",
+        "description": "auto matches the bar foreground with redline; thermal follows load (green/orange/red); or pick a theme color / hex."
+      },
+      {
+        "key": "rpmFormat",
+        "type": "enum",
+        "label": "RPM number length",
+        "options": [
+          "full",
+          "compact",
+          "padded"
+        ],
+        "defaultValue": "full",
+        "description": "full (5200), compact (5.2k), or padded (0850)."
+      },
+      {
+        "key": "rpmUnit",
+        "type": "boolean",
+        "label": "Show \"rpm\" word",
         "defaultValue": true,
-        "description": "Show the main fan's RPM and a tachometer gauge beside the temperature in the bar."
+        "description": "Show or hide the unit word next to the RPM number in the bar."
+      },
+      {
+        "key": "barDivider",
+        "type": "boolean",
+        "label": "Bar divider",
+        "defaultValue": false,
+        "description": "Draw a hairline separator between the temperature and the tachometer."
+      },
+      {
+        "key": "tachMax",
+        "type": "integer",
+        "label": "Tachometer max RPM (0 = auto)",
+        "min": 0,
+        "max": 29999,
+        "step": 500,
+        "defaultValue": 0,
+        "description": "Full-scale RPM for the dial needle. 0 uses the hardware max (or 5000)."
       },
       {
         "key": "animations",

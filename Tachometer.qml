@@ -8,6 +8,7 @@ Item {
 
   property real fraction: 0
   property real redline: 0.85
+  property bool showRedline: true
   property color color: Color.foreground
   property color trackColor: Util.alpha(color, 0.24)
   property color accentColor: color
@@ -24,6 +25,7 @@ Item {
 
   onAnimatedFractionChanged: if (visible) canvas.requestPaint()
   onRedlineChanged: if (visible) canvas.requestPaint()
+  onShowRedlineChanged: if (visible) canvas.requestPaint()
   onColorChanged: if (visible) canvas.requestPaint()
   onTrackColorChanged: if (visible) canvas.requestPaint()
   onAccentColorChanged: if (visible) canvas.requestPaint()
@@ -57,23 +59,32 @@ Item {
       var endAngle = startAngle + sweep
       var redStart = startAngle + red * sweep
       var valAngle = startAngle + frac * sweep
-      var inRed = frac >= red
+      var inRed = root.showRedline && frac >= red
 
-      // Base track up to redline
-      ctx.beginPath()
-      ctx.arc(cx, cy, r, startAngle, redStart, false)
-      ctx.strokeStyle = Qt.rgba(root.trackColor.r, root.trackColor.g, root.trackColor.b, root.trackColor.a)
-      ctx.lineWidth = stroke
-      ctx.lineCap = "round"
-      ctx.stroke()
+      if (root.showRedline) {
+        // Base track up to redline
+        ctx.beginPath()
+        ctx.arc(cx, cy, r, startAngle, redStart, false)
+        ctx.strokeStyle = Qt.rgba(root.trackColor.r, root.trackColor.g, root.trackColor.b, root.trackColor.a)
+        ctx.lineWidth = stroke
+        ctx.lineCap = "round"
+        ctx.stroke()
 
-      // Redline zone on the high-RPM end
-      ctx.beginPath()
-      ctx.arc(cx, cy, r, redStart, endAngle, false)
-      ctx.strokeStyle = Qt.rgba(root.dangerColor.r, root.dangerColor.g, root.dangerColor.b, 0.42)
-      ctx.lineWidth = stroke
-      ctx.lineCap = "round"
-      ctx.stroke()
+        // Redline zone on the high-RPM end
+        ctx.beginPath()
+        ctx.arc(cx, cy, r, redStart, endAngle, false)
+        ctx.strokeStyle = Qt.rgba(root.dangerColor.r, root.dangerColor.g, root.dangerColor.b, 0.42)
+        ctx.lineWidth = stroke
+        ctx.lineCap = "round"
+        ctx.stroke()
+      } else {
+        ctx.beginPath()
+        ctx.arc(cx, cy, r, startAngle, endAngle, false)
+        ctx.strokeStyle = Qt.rgba(root.trackColor.r, root.trackColor.g, root.trackColor.b, root.trackColor.a)
+        ctx.lineWidth = stroke
+        ctx.lineCap = "round"
+        ctx.stroke()
+      }
 
       // Subtle radial ticks when there is room
       if (s >= 24) {

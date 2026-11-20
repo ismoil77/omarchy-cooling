@@ -71,7 +71,35 @@ test("primaryFan: prefers non-GPU and CPU-labeled fan, uses rated max or 5000 fl
   assert.equal(hp.max, 5000)
   assert.equal(hp.fraction, 0.5)
 
+  const custom = plain(M.primaryFan(noMax, [3000], {}, 4000))
+  assert.equal(custom.max, 4000)
+  assert.equal(custom.fraction, 0.75)
+
   assert.equal(M.primaryFan(noMax, [65280], {}), null)
+})
+
+test("tachometer settings normalization and RPM formatting", () => {
+  assert.equal(M.tachMode(true), "both")
+  assert.equal(M.tachMode(false), "off")
+  assert.equal(M.tachMode("gauge"), "gauge")
+  assert.equal(M.tachMode("rpm"), "rpm")
+  assert.equal(M.tachMode("unknown"), "both")
+
+  assert.equal(M.formatRpmNumber(5200, "full"), "5200")
+  assert.equal(M.formatRpmNumber(5200, "compact"), "5.2k")
+  assert.equal(M.formatRpmNumber(850, "compact"), "850")
+  assert.equal(M.formatRpmNumber(850, "padded"), "0850")
+  assert.equal(M.formatRpmNumber(0, "padded"), "0000")
+
+  assert.equal(M.formatBarRpm(en, 5200, "full", true), "5200 rpm")
+  assert.equal(M.formatBarRpm(en, 5200, "compact", true), "5.2k rpm")
+  assert.equal(M.formatBarRpm(en, 5200, "compact", false), "5.2k")
+  assert.equal(M.formatBarRpm(en, 850, "padded", false), "0850")
+
+  assert.equal(M.boolSetting("false", true), false)
+  assert.equal(M.boolSetting("true", false), true)
+  assert.equal(M.boolSetting(false, true), false)
+  assert.equal(M.boolSetting(undefined, true), true)
 })
 
 test("tooltip includes primary fan speed when present", () => {
