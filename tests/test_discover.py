@@ -66,6 +66,30 @@ class Discover(unittest.TestCase):
         put(root, "class/hwmon/hwmon0/name", "acpi_fan\n"); put(root, "class/hwmon/hwmon0/fan1_input", "1200\n")
         self.assertEqual([f["driver"] for f in discover.discover(root)["fans"]], ["acpi_fan"])
 
+    def test_dell_ddv_filtered_with_dell_smm_and_bogus_rpm_skipped(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        h = "class/hwmon/"
+        put(root, h + "hwmon5/name", "dell_ddv\n"); put(root, h + "hwmon5/fan1_input", "3400\n")
+        put(root, h + "hwmon6/name", "dell_smm\n"); put(root, h + "hwmon6/fan1_input", "3400\n")
+        put(root, h + "hwmon6/fan1_label", "Processor Fan\n"); put(root, h + "hwmon6/fan1_max", "5200\n")
+        fans = discover.discover(root)["fans"]
+        self.assertEqual(len(fans), 1)
+        self.assertEqual((fans[0]["driver"], fans[0]["label"], fans[0]["max"]), ("dell_smm", "Processor Fan", 5200))
+
+    def test_placeholder_faulty_and_unplausible_fans_skipped(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        h = "class/hwmon/"
+        put(root, h + "hwmon1/name", "dell_ddv\n"); put(root, h + "hwmon1/fan1_input", "65280\n")
+        put(root, h + "hwmon2/name", "nct6775\n")
+        put(root, h + "hwmon2/fan1_input", "65535\n")
+        put(root, h + "hwmon2/fan2_input", "0\n"); put(root, h + "hwmon2/fan2_fault", "1\n")
+        put(root, h + "hwmon2/fan3_input", "-1\n")
+        put(root, h + "hwmon2/fan4_input", "1450\n"); put(root, h + "hwmon2/fan4_max", "65535\n")
+        fans = discover.discover(root)["fans"]
+        self.assertEqual([(f["driver"], f["index"], f["max"]) for f in fans], [("nct6775", 4, None)])
+
     def test_no_sysfs_means_nothing_not_a_crash(self):
         d = discover.discover("/nonexistent")
         self.assertEqual((d["fans"], d["temps"], d["gpus"]), ([], [], []))

@@ -7,6 +7,22 @@
 
 var GROUP_ORDER = ["cpu", "gpu", "ssd", "board", "other"]
 var GROUP_KEYS = { cpu: "groupCpu", gpu: "groupGpu", ssd: "groupSsd", board: "groupBoard", other: "groupOther" }
+var GPU_DRIVERS = { amdgpu: 1, nouveau: 1, radeon: 1, i915: 1, xe: 1 }
+var MAX_PLAUSIBLE_RPM = 30000
+var DEFAULT_TACH_MAX = 5000
+var TACH_MODES = ["both", "gauge", "rpm", "off"]
+var RPM_FORMATS = ["full", "compact", "padded"]
+var TACH_SCALES = [0, 3500, 5000, 6500, 8000]
+var TACH_COLOR_NAMES = ["auto", "thermal", "accent", "green", "cyan", "blue", "yellow", "orange", "red", "magenta"]
+var TACH_COLOR_FALLBACKS = {
+  green: "#66bb6a",
+  cyan: "#26c6da",
+  blue: "#42a5f5",
+  yellow: "#eab308",
+  orange: "#fb923c",
+  red: "#ef4444",
+  magenta: "#c084fc"
+}
 
 function config(raw) {
   return { lang: I18n.resolve(raw && raw.language, raw && raw.locale, Strings.langs, { "русский": "ru", english: "en" }) }
@@ -29,6 +45,18 @@ function parseDiscovery(raw) {
 function reading(text) {
   var n = parseInt(String(text || "").trim(), 10)
   return isFinite(n) ? n : null
+}
+
+// Readings >= 30000 RPM (e.g. 65280 / 0xFF00, 65535 / 0xFFFF) or < 0 are firmware placeholders.
+function validRpm(n) {
+  return n !== null && n !== undefined && typeof n === "number" && isFinite(n) && n >= 0 && n < MAX_PLAUSIBLE_RPM
+}
+
+function fanCeiling(fan, rpm, peaks, fallback) {
+  var pk = fan && fan.path && peaks && validRpm(peaks[fan.path]) ? peaks[fan.path] : 0
+  var known = fan && validRpm(fan.max) && fan.max > 0 ? fan.max : 0
+  var base = known > 0 ? known : (fallback || 1)
+  return Math.max(base, pk, validRpm(rpm) ? rpm : 0, 1)
 }
 
 // "88°"
@@ -69,20 +97,102 @@ function level(cpu) {
 
 function kitLevel(l) { return l === "hot" ? "bad" : l === "warm" ? "warn" : "good" }
 
-// Fans with their share of the fastest speed any of them reached (a fan's own
-// maximum is rarely known), so a slower fan reads as slower.
+// Fans with their share of their rated maximum (when hwmon provides fanN_max) or
+// the fastest speed any of them reached, so a slower fan reads as slower.
 function fanRows(cfg, fans, values, peaks) {
   var out = []
   var peak = 1
-  for (var j = 0; j < fans.length; j++)
-    peak = Math.max(peak, peaks[fans[j].path] || 0, values[j] || 0)
+  for (var j = 0; j < fans.length; j++) {
+    var v = values[j]
+    if (validRpm(v)) peak = Math.max(peak, v)
+    var pk = peaks && fans[j] && fans[j].path ? peaks[fans[j].path] : null
+    if (validRpm(pk)) peak = Math.max(peak, pk)
+  }
   for (var i = 0; i < fans.length; i++) {
     var rpm = values[i]
-    if (rpm === null || rpm === undefined) continue
-    out.push({ label: tr(cfg, "fan", { n: out.length + 1 }), rpm: rpm,
-               text: rpm > 0 ? tr(cfg, "rpm", { n: rpm }) : tr(cfg, "stopped"), fraction: rpm / peak })
+    if (!validRpm(rpm)) continue
+    var f = fans[i]
+    var ceiling = fanCeiling(f, rpm, peaks, peak)
+    out.push({ label: tr(cfg, "fan", { n: out.length + 1 }), rpm: rpm, max: ceiling,
+               text: rpm > 0 ? tr(cfg, "rpm", { n: rpm }) : tr(cfg, "stopped"), fraction: rpm / ceiling })
   }
   return out
+}
+
+// Primary fan for the bar tachometer: prefers non-GPU fans, then CPU/Processor labels,
+// then currently active fans, keeping a stable earliest-index choice on ties.
+function primaryFan(fans, values, peaks, customMax) {
+  if (!Array.isArray(fans) || !Array.isArray(values)) return null
+  var bestIdx = -1
+  var bestScore = -1
+  for (var i = 0; i < fans.length; i++) {
+    var rpm = values[i]
+    if (!validRpm(rpm)) continue
+    var f = fans[i] || {}
+    var nonGpu = GPU_DRIVERS[f.driver] ? 0 : 4
+    var cpuLabel = f.label && /\b(cpu|processor)\b/i.test(String(f.label)) ? 2 : 0
+    var pk = f.path && peaks && validRpm(peaks[f.path]) ? peaks[f.path] : 0
+    var active = (rpm > 0 || pk > 0) ? 1 : 0
+    var score = nonGpu + cpuLabel + active
+    if (score > bestScore) { bestScore = score; bestIdx = i }
+  }
+  if (bestIdx < 0) return null
+  var chosen = fans[bestIdx]
+  var chosenRpm = values[bestIdx]
+  var overrideMax = tachMaxValue(customMax)
+  var ceiling = overrideMax > 0 ? overrideMax : fanCeiling(chosen, chosenRpm, peaks, DEFAULT_TACH_MAX)
+  return {
+    rpm: chosenRpm,
+    max: ceiling,
+    fraction: Math.max(0, Math.min(1, chosenRpm / ceiling)),
+    label: chosen && chosen.label ? chosen.label : null,
+    driver: chosen && chosen.driver ? chosen.driver : ""
+  }
+}
+
+function tachMode(raw) {
+  if (raw === false || raw === "off" || raw === "none") return "off"
+  if (raw === "gauge" || raw === "dial") return "gauge"
+  if (raw === "rpm" || raw === "text") return "rpm"
+  return "both"
+}
+
+function rpmFormat(raw) {
+  var s = String(raw || "").toLowerCase()
+  if (s === "compact" || s === "short") return "compact"
+  if (s === "padded" || s === "fixed") return "padded"
+  return "full"
+}
+
+function tachMaxValue(raw) {
+  var n = Number(raw)
+  return isFinite(n) && n > 0 && n < MAX_PLAUSIBLE_RPM ? Math.round(n) : 0
+}
+
+function boolSetting(raw, fallback) {
+  if (raw === true || raw === false) return raw
+  if (typeof raw === "string") {
+    var s = raw.trim().toLowerCase()
+    if (s === "true" || s === "1" || s === "yes" || s === "on") return true
+    if (s === "false" || s === "0" || s === "no" || s === "off") return false
+  }
+  return fallback
+}
+
+function formatRpmNumber(rpm, format) {
+  if (!validRpm(rpm)) return "—"
+  var n = Math.round(rpm)
+  var fmt = rpmFormat(format)
+  if (fmt === "compact") return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n)
+  var s = String(n)
+  if (fmt === "padded") while (s.length < 4) s = "0" + s
+  return s
+}
+
+function formatBarRpm(cfg, rpm, format, showUnit) {
+  var num = formatRpmNumber(rpm, format)
+  if (num === "—") return num
+  return showUnit === false ? num : tr(cfg, "rpm", { n: num })
 }
 
 function groupLabel(cfg, g) { return tr(cfg, GROUP_KEYS[g] || "groupOther") }
@@ -95,9 +205,12 @@ function headerSay(cfg, fans) {
   return tr(cfg, "fansSay", { fans: word, rpm: moving.map(function(f) { return f.rpm }).join(" · ") })
 }
 
-// Closed, only the processor is read: the tooltip says what is fresh.
-function tooltip(cfg, cpu) {
-  return tr(cfg, "tipBar", { t: deg(cpu ? cpu.main : null) })
+// Closed, the tooltip says what is fresh (and the primary fan speed when tracked).
+function tooltip(cfg, cpu, fan) {
+  var t = deg(cpu ? cpu.main : null)
+  if (!fan || !validRpm(fan.rpm)) return tr(cfg, "tipBar", { t: t })
+  var sayFan = fan.rpm > 0 ? tr(cfg, "rpm", { n: fan.rpm }) : tr(cfg, "stopped")
+  return tr(cfg, "tipBarFan", { t: t, fan: sayFan })
 }
 
 // `powerprofilesctl list`: "* performance:" marks the active one. Every

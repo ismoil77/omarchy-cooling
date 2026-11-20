@@ -45,6 +45,69 @@ test("fan rows: share of the fastest speed seen, words for a stopped fan", () =>
   assert.equal(M.headerSay(en, [rows[1]]), "1 fan · stopped")
 })
 
+test("fan rows: known max calibrates fraction and bogus rpm readings are ignored", () => {
+  const fans = [{ path: "/bogus", max: 5200 }, { path: "/real", max: 5200 }]
+  const rows = plain(M.fanRows(en, fans, [65280, 2600], { "/bogus": 65280 }))
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].rpm, 2600)
+  assert.equal(rows[0].max, 5200)
+  assert.equal(rows[0].fraction, 0.5)
+})
+
+test("primaryFan: prefers non-GPU and CPU-labeled fan, uses rated max or 5000 floor", () => {
+  const mixed = [
+    { path: "/gpu", driver: "amdgpu", label: "fan1", max: 3200 },
+    { path: "/case", driver: "nct6798", label: "Chassis", max: null },
+    { path: "/cpu", driver: "dell_smm", label: "Processor Fan", max: 5200 }
+  ]
+  const picked = plain(M.primaryFan(mixed, [2000, 1500, 0], {}))
+  assert.equal(picked.driver, "dell_smm")
+  assert.equal(picked.rpm, 0)
+  assert.equal(picked.max, 5200)
+  assert.equal(picked.fraction, 0)
+
+  const noMax = [{ path: "/hp", driver: "hp", label: null, max: null }]
+  const hp = plain(M.primaryFan(noMax, [2500], { "/hp": 2500 }))
+  assert.equal(hp.max, 5000)
+  assert.equal(hp.fraction, 0.5)
+
+  const custom = plain(M.primaryFan(noMax, [3000], {}, 4000))
+  assert.equal(custom.max, 4000)
+  assert.equal(custom.fraction, 0.75)
+
+  assert.equal(M.primaryFan(noMax, [65280], {}), null)
+})
+
+test("tachometer settings normalization and RPM formatting", () => {
+  assert.equal(M.tachMode(true), "both")
+  assert.equal(M.tachMode(false), "off")
+  assert.equal(M.tachMode("gauge"), "gauge")
+  assert.equal(M.tachMode("rpm"), "rpm")
+  assert.equal(M.tachMode("unknown"), "both")
+
+  assert.equal(M.formatRpmNumber(5200, "full"), "5200")
+  assert.equal(M.formatRpmNumber(5200, "compact"), "5.2k")
+  assert.equal(M.formatRpmNumber(850, "compact"), "850")
+  assert.equal(M.formatRpmNumber(850, "padded"), "0850")
+  assert.equal(M.formatRpmNumber(0, "padded"), "0000")
+
+  assert.equal(M.formatBarRpm(en, 5200, "full", true), "5200 rpm")
+  assert.equal(M.formatBarRpm(en, 5200, "compact", true), "5.2k rpm")
+  assert.equal(M.formatBarRpm(en, 5200, "compact", false), "5.2k")
+  assert.equal(M.formatBarRpm(en, 850, "padded", false), "0850")
+
+  assert.equal(M.boolSetting("false", true), false)
+  assert.equal(M.boolSetting("true", false), true)
+  assert.equal(M.boolSetting(false, true), false)
+  assert.equal(M.boolSetting(undefined, true), true)
+})
+
+test("tooltip includes primary fan speed when present", () => {
+  assert.equal(M.tooltip(en, { main: 63 }), "Cooling: processor 63°")
+  assert.equal(M.tooltip(en, { main: 63 }, { rpm: 4600 }), "Cooling: processor 63° · 4600 rpm")
+  assert.equal(M.tooltip(en, { main: 63 }, { rpm: 0 }), "Cooling: processor 63° · stopped")
+})
+
 test("profiles: whatever the daemon offers, quietest first", () => {
   const p = plain(M.parseProfiles("* performance:\n    CpuDriver: intel_pstate\n    Degraded:   no\n\n  balanced:\n  power-saver:\n"))
   assert.deepEqual(p, { active: "performance", available: ["power-saver", "balanced", "performance"] })

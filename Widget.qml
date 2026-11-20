@@ -29,6 +29,15 @@ Panel {
   readonly property var cfg: Model.config({ language: setting("language", "auto"), locale: Qt.locale().name })
   readonly property int pollSeconds: Math.max(1, Number(setting("interval", 3)) || 3)
   readonly property bool vertical: bar ? bar.vertical : false
+  readonly property int barSize: bar ? bar.barSize : Style.bar.sizeHorizontal
+  readonly property string tachMode: Model.tachMode(setting("tachometer", "both"))
+  readonly property string tachColorSetting: String(setting("tachColor", "auto")).trim()
+  readonly property string rpmFormatSetting: Model.rpmFormat(setting("rpmFormat", "full"))
+  readonly property bool showRpmUnit: Model.boolSetting(setting("rpmUnit", true), true)
+  readonly property bool showDivider: Model.boolSetting(setting("barDivider", false), false)
+  readonly property int tachMaxSetting: Model.tachMaxValue(setting("tachMax", 0))
+  readonly property bool showBarTach: tachMode !== "off"
+  property bool barCustomizeOpen: false
   readonly property string icon: "󰈐"
 
   function tr(key, params) { return Model.tr(cfg, key, params) }
@@ -91,19 +100,71 @@ Panel {
   readonly property var tempGroups: Model.groups(found ? found.temps : [], tempValues)
   readonly property var cpu: tempGroups.filter(function(g) { return g.group === "cpu" })[0] || tempGroups[0] || null
   readonly property var fans: Model.fanRows(cfg, found ? found.fans : [], fanValues, peaks)
+  readonly property var barFan: Model.primaryFan(found ? found.fans : [], fanValues, peaks, tachMaxSetting)
+  readonly property bool hasBarFan: showBarTach && barFan !== null
+  readonly property bool showDial: hasBarFan && (tachMode === "both" || tachMode === "gauge")
+  readonly property bool showRpmText: !vertical && hasBarFan && (tachMode === "both" || tachMode === "rpm")
+  readonly property bool showVerticalRpm: vertical && hasBarFan && tachMode === "rpm"
+  readonly property bool showTachGroup: showDial || showRpmText
+  readonly property bool showBarDivider: !vertical && showDivider && showTachGroup
+  readonly property string barTempText: cpu ? Model.deg(cpu.main) : ""
+  readonly property string barRpmText: hasBarFan ? Model.formatBarRpm(cfg, barFan.rpm, rpmFormatSetting, showRpmUnit) : ""
   readonly property string heat: Model.level(cpu)
   readonly property string kitLevel: Model.kitLevel(heat)
   readonly property var nvidia: found ? found.gpus.filter(function(g) { return g.vendor === "nvidia" })[0] || null : null
+  onShowBarTachChanged: if (showBarTach) Qt.callLater(poll)
 
   Kit.ThemePalette { id: themePalette }
   Kit.Look {
     id: skin
     textSize: String(root.setting("textSize", "Normal"))
-    animations: root.setting("animations", true) !== false
+    animations: Model.boolSetting(root.setting("animations", true), true)
     fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
     themeColors: themePalette.colors
   }
   readonly property color levelBase: heat === "hot" ? skin.themed("red", Color.urgent) : heat === "warm" ? skin.themed("yellow", "#d0a215") : Color.accent
+  readonly property color hotRedColor: skin.themed("red", Color.urgent)
+  readonly property color warmOrangeColor: skin.themed("orange", skin.themed("yellow", "#e0905c"))
+  readonly property color coolGreenColor: skin.themed("green", "#66bb6a")
+
+  function resolveTachColor(choice, fallback) {
+    var key = String(choice || "auto").toLowerCase()
+    if (key === "accent") return Color.accent
+    if (Model.TACH_COLOR_FALLBACKS[key]) return skin.themed(key, Model.TACH_COLOR_FALLBACKS[key])
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(key)) return Qt.color(key)
+    return fallback
+  }
+
+  function tachSwatchColor(name) {
+    if (name === "auto") return skin.ink
+    if (name === "thermal") return warmOrangeColor
+    return resolveTachColor(name, skin.ink)
+  }
+
+  function colorLabelKey(name) {
+    return "col" + name.charAt(0).toUpperCase() + name.slice(1)
+  }
+
+  function displayLabelKey(mode) {
+    return "disp" + mode.charAt(0).toUpperCase() + mode.slice(1)
+  }
+
+  function formatLabelKey(fmt) {
+    return "fmt" + fmt.charAt(0).toUpperCase() + fmt.slice(1)
+  }
+
+  function barSummaryText() {
+    var parts = [tr(displayLabelKey(tachMode))]
+    if (tachMode === "both" || tachMode === "gauge") {
+      var col = tachColorSetting.toLowerCase()
+      parts.push(Model.TACH_COLOR_NAMES.indexOf(col) >= 0 ? tr(colorLabelKey(col)) : tachColorSetting)
+    }
+    if (tachMode === "both" || tachMode === "rpm") {
+      parts.push(tr(formatLabelKey(rpmFormatSetting)))
+      if (showRpmUnit) parts.push(tr("rpm", { n: "" }).trim())
+    }
+    return parts.join(" · ")
+  }
 
   TextMetrics { id: valueMetrics; font.family: skin.fontFamily; font.pixelSize: skin.small; text: "0000 " + root.tr("rpm", { n: "" }) }
 
@@ -164,17 +225,17 @@ Panel {
     polledOnce = true
     var temps = found.temps
     tempValues = readSome(tempFiles, tempValues, function(i) { return busy || temps[i].group === "cpu" })
-    if (busy) {
+    if (busy || showBarTach) {
       fanValues = readSome(fanFiles, fanValues, function() { return true })
       var p = Object.assign({}, peaks)
       var changed = false
       for (var i = 0; i < found.fans.length; i++) {
         var v = fanValues[i]
-        if (v !== null && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
+        if (Model.validRpm(v) && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
       }
       if (changed) peaks = p
-      if (pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
     }
+    if (busy && pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
     // The mode in force and the load matter while Auto decides, or while seen.
     if (busy || modeSetting === "auto") {
       if (platformFile.path !== "") { platformFile.reload(); platformText = platformFile.text() }
@@ -199,11 +260,15 @@ Panel {
     if (Date.now() - pendingSince >= autoHold) { pending = ""; setProfile(target) }
   }
 
-  function saveMode(value) {
-    settings = Object.assign({}, settings, { mode: value })
+  function saveSetting(key, value) {
+    var patch = {}
+    patch[key] = value
+    settings = Object.assign({}, settings, patch)
     if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
       bar.shell.updateEntryInline(moduleName, settings)
   }
+
+  function saveMode(value) { saveSetting("mode", value) }
 
   // A button: Auto, a profile of this machine, or Max.
   function chooseMode(m) {
@@ -351,7 +416,9 @@ Panel {
     // What the widget sees, for checking it without opening the popup.
     function state(): string {
       return JSON.stringify({ modes: root.modes, selected: root.selected, active: root.active, maxOn: root.maxOn,
-                              mode: root.modeSetting, cpu: root.cpu ? Math.round(root.cpu.main) : null, load: root.load, cpus: root.cpus })
+                              mode: root.modeSetting, cpu: root.cpu ? Math.round(root.cpu.main) : null, load: root.load, cpus: root.cpus,
+                              fans: root.fans.map(function(f) { return { label: f.label, rpm: f.rpm, max: f.max } }),
+                              barFan: root.barFan })
     }
   }
 
@@ -359,26 +426,228 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  TextMetrics {
-    id: barLabelMetrics
+  FontMetrics {
+    id: barFontMetrics
     font.family: button.fontFamily
     font.pixelSize: button.fontSize
-    text: button.labelText
   }
 
-  BarIconButton {
+  TextMetrics {
+    id: barTempMetrics
+    font.family: button.fontFamily
+    font.pixelSize: button.fontSize
+    font.features: { "tnum": 1 }
+    text: root.barTempText
+  }
+
+  TextMetrics {
+    id: barRpmMetrics
+    font.family: button.fontFamily
+    font.pixelSize: button.fontSize
+    font.features: { "tnum": 1 }
+    text: root.barRpmText
+  }
+
+  readonly property real barTextOffsetY: (barFontMetrics.descent - barFontMetrics.ascent + barFontMetrics.tightBoundingRect("0").height) / 2
+  readonly property real tachSize: Math.min(Math.max(Style.bar.iconCanvas, Math.round(Style.bar.iconCanvas * 1.125)), Math.max(Style.bar.iconCanvas, root.barSize - Style.space(6)))
+  readonly property real tempGroupWidth: Style.bar.iconCanvas + (root.barTempText !== "" ? Style.space(4) + barTempMetrics.width : 0)
+  readonly property real tachGroupWidth: (root.showDial ? root.tachSize : 0)
+    + (root.showDial && root.showRpmText ? Style.space(4) : 0)
+    + (root.showRpmText ? barRpmMetrics.width : 0)
+  readonly property real barGapWidth: root.showTachGroup ? (root.showBarDivider ? Style.space(12) + 1 : Style.space(8)) : 0
+  readonly property string barVerticalRpmText: root.showVerticalRpm && root.barFan ? Model.formatRpmNumber(root.barFan.rpm, "compact") : ""
+  readonly property string tachColorKey: root.tachColorSetting.toLowerCase()
+  readonly property bool tachUsesRedline: tachColorKey === "auto" || tachColorKey === "thermal"
+  readonly property color tachActiveColor: {
+    if (tachColorKey === "auto") return button.foreground
+    if (tachColorKey === "thermal") {
+      var frac = root.barFan ? root.barFan.fraction : 0
+      return frac >= 0.85 ? root.hotRedColor : frac >= 0.5 ? root.warmOrangeColor : root.coolGreenColor
+    }
+    return root.resolveTachColor(root.tachColorSetting, button.foreground)
+  }
+  property color tempColor: root.heat !== "calm" ? root.levelBase : button.foreground
+  Behavior on tempColor {
+    enabled: !root.bar || root.bar.foregroundAnimationEnabled
+    ColorAnimation { duration: Style.duration(160) }
+  }
+
+  TextMetrics {
+    id: verticalRpmMetrics
+    font.family: button.fontFamily
+    font.pixelSize: Style.font.caption
+    text: root.barVerticalRpmText
+  }
+
+  WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.icon
-    labelText: root.vertical || !root.cpu ? "" : Model.deg(root.cpu.main)
+    labelVisible: false
+    hasVisualContent: true
+    fontSize: Style.bar.iconFont
     active: root.heat !== "calm"
     activeColor: root.levelBase
-    slotSize: labelText === "" ? Style.bar.iconSlot : Math.ceil(button.canvasSize + barLabelMetrics.width + Style.space(4)) + Style.space(14)
-    tooltipText: root.opened ? "" : Model.tooltip(root.cfg, root.cpu)
+    fixedWidth: root.vertical ? -1 : Math.ceil(barContent.width) + Style.space(14)
+    fixedHeight: root.vertical
+      ? (root.showDial ? Math.ceil(Style.bar.iconCanvas + root.tachSize + Style.space(4)) + Style.space(12)
+         : root.showVerticalRpm ? Math.ceil(Style.bar.iconCanvas + verticalRpmMetrics.height + Style.space(2)) + Style.space(12)
+         : Style.bar.iconSlot)
+      : -1
+    tooltipText: root.opened ? "" : Model.tooltip(root.cfg, root.cpu, root.hasBarFan ? root.barFan : null)
     onPressed: function(b) {
       if (b === Qt.RightButton) { root.readProfiles(); root.nextProfile() }
       else root.toggle()
+    }
+
+    Item {
+      id: barContent
+      x: (button.width - width) / 2
+      y: (button.height - height) / 2
+      scale: button.pressScale
+      width: root.vertical
+        ? Math.max(Style.bar.iconCanvas, root.showDial ? root.tachSize : verticalRpmMetrics.width)
+        : (root.tempGroupWidth + root.barGapWidth + root.tachGroupWidth)
+      height: root.vertical
+        ? (Style.bar.iconCanvas
+           + (root.showDial ? Style.space(4) + root.tachSize
+              : root.showVerticalRpm ? Style.space(2) + verticalRpmMetrics.height : 0))
+        : Math.max(Style.bar.iconCanvas, root.showDial ? root.tachSize : 0)
+
+      // Horizontal bar: [fan icon] [temp°]  |  [tachometer dial] [rpm]
+      Row {
+        visible: !root.vertical
+        anchors.centerIn: parent
+        height: barContent.height
+        spacing: root.showBarDivider ? Style.space(6) : Style.space(8)
+
+        Row {
+          height: barContent.height
+          spacing: Style.space(4)
+
+          OpticalGlyph {
+            width: Style.bar.iconCanvas
+            height: barContent.height
+            text: root.icon
+            fontFamily: button.fontFamily
+            fontSize: button.fontSize
+            paintedSize: Style.bar.iconSize
+            color: root.tempColor
+          }
+
+          Item {
+            visible: root.barTempText !== ""
+            width: barTempMetrics.width
+            height: barContent.height
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.verticalCenterOffset: root.barTextOffsetY
+              textFormat: Text.PlainText
+              text: root.barTempText
+              font.family: button.fontFamily
+              font.pixelSize: button.fontSize
+              font.features: { "tnum": 1 }
+              color: root.tempColor
+              renderType: Text.NativeRendering
+            }
+          }
+        }
+
+        Rectangle {
+          visible: root.showBarDivider
+          width: 1
+          height: Style.bar.iconSize
+          anchors.verticalCenter: parent.verticalCenter
+          color: Util.alpha(button.foreground, 0.22)
+        }
+
+        Row {
+          visible: root.showTachGroup
+          height: barContent.height
+          spacing: Style.space(4)
+
+          Tachometer {
+            visible: root.showDial
+            width: root.tachSize
+            height: root.tachSize
+            anchors.verticalCenter: parent.verticalCenter
+            fraction: root.barFan ? root.barFan.fraction : 0
+            showRedline: root.tachUsesRedline
+            color: root.tachActiveColor
+            trackColor: Util.alpha(button.foreground, 0.24)
+            accentColor: root.tachActiveColor
+            dangerColor: root.hotRedColor
+            animations: skin.motion
+          }
+
+          Item {
+            visible: root.showRpmText
+            width: barRpmMetrics.width
+            height: barContent.height
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.verticalCenterOffset: root.barTextOffsetY
+              textFormat: Text.PlainText
+              text: root.barRpmText
+              font.family: button.fontFamily
+              font.pixelSize: button.fontSize
+              font.features: { "tnum": 1 }
+              color: button.foreground
+              renderType: Text.NativeRendering
+              Behavior on color {
+                enabled: !root.bar || root.bar.foregroundAnimationEnabled
+                ColorAnimation { duration: Style.duration(160) }
+              }
+            }
+          }
+        }
+      }
+
+      // Vertical bar: [fan icon] over [tachometer dial or compact rpm]
+      Column {
+        visible: root.vertical
+        anchors.centerIn: parent
+        spacing: root.showDial ? Style.space(4) : Style.space(2)
+
+        OpticalGlyph {
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Style.bar.iconCanvas
+          height: Style.bar.iconCanvas
+          text: root.icon
+          fontFamily: button.fontFamily
+          fontSize: button.fontSize
+          paintedSize: Style.bar.iconSize
+          color: root.tempColor
+        }
+
+        Tachometer {
+          visible: root.showDial
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.tachSize
+          height: root.tachSize
+          fraction: root.barFan ? root.barFan.fraction : 0
+          showRedline: root.tachUsesRedline
+          color: root.tachActiveColor
+          trackColor: Util.alpha(button.foreground, 0.24)
+          accentColor: root.tachActiveColor
+          dangerColor: root.hotRedColor
+          animations: skin.motion
+        }
+
+        Text {
+          visible: root.showVerticalRpm
+          anchors.horizontalCenter: parent.horizontalCenter
+          textFormat: Text.PlainText
+          text: root.barVerticalRpmText
+          font.family: button.fontFamily
+          font.pixelSize: Style.font.caption
+          font.features: { "tnum": 1 }
+          color: button.foreground
+          renderType: Text.NativeRendering
+        }
+      }
     }
   }
 
@@ -616,6 +885,241 @@ Panel {
                 font.family: skin.fontFamily
                 font.pixelSize: skin.small
                 wrapMode: Text.WordWrap
+              }
+            }
+
+            // ---------- Bar customization ----------
+            Kit.Section {
+              visible: root.found !== null
+              width: parent.width
+              look: skin
+              caption: root.tr("sectionBar")
+              trailing: Kit.MoreButton {
+                look: skin
+                text: root.barCustomizeOpen ? root.tr("collapse") : root.tr("customize")
+                onClicked: root.barCustomizeOpen = !root.barCustomizeOpen
+              }
+
+              Text {
+                visible: !root.barCustomizeOpen
+                width: parent.width
+                textFormat: Text.PlainText
+                text: root.barSummaryText()
+                color: skin.dim
+                font.family: skin.fontFamily
+                font.pixelSize: skin.small
+                elide: Text.ElideRight
+              }
+
+              Column {
+                visible: root.barCustomizeOpen
+                width: parent.width
+                spacing: Style.space(8)
+
+                // Display mode
+                Column {
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.tr("optDisplay")
+                    color: skin.dim
+                    font.family: skin.fontFamily
+                    font.pixelSize: skin.small
+                  }
+
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Repeater {
+                      model: Model.TACH_MODES
+                      delegate: Kit.ActionButton {
+                        required property string modelData
+                        look: skin
+                        compact: true
+                        text: root.tr(root.displayLabelKey(modelData))
+                        selected: root.tachMode === modelData
+                        onClicked: root.saveSetting("tachometer", modelData)
+                      }
+                    }
+                  }
+                }
+
+                // Tachometer color
+                Column {
+                  visible: root.tachMode === "both" || root.tachMode === "gauge"
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.tr("optColor")
+                    color: skin.dim
+                    font.family: skin.fontFamily
+                    font.pixelSize: skin.small
+                  }
+
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Repeater {
+                      model: Model.TACH_COLOR_NAMES
+                      delegate: Rectangle {
+                        id: swatchBtn
+                        required property string modelData
+                        readonly property bool isSelected: root.tachColorKey === modelData
+                        readonly property color swatch: root.tachSwatchColor(modelData)
+
+                        implicitWidth: swatchRow.implicitWidth + Style.space(14)
+                        implicitHeight: swatchRow.implicitHeight + Style.space(4)
+                        radius: Math.round(Style.space(6))
+                        color: swatchArea.containsMouse && !isSelected ? skin.surfaceHover : (isSelected ? skin.ink : "transparent")
+                        border.width: 1.5
+                        border.color: isSelected ? skin.ink : Util.alpha(skin.ink, 0.75)
+
+                        Behavior on color { ColorAnimation { duration: skin.motion ? Style.duration(120) : 0 } }
+
+                        Row {
+                          id: swatchRow
+                          anchors.centerIn: parent
+                          spacing: Style.space(5)
+
+                          Rectangle {
+                            width: Style.space(8)
+                            height: width
+                            radius: width / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: swatchBtn.swatch
+                            border.width: swatchBtn.isSelected ? 1 : 0
+                            border.color: swatchBtn.isSelected ? skin.background : "transparent"
+                          }
+
+                          Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            textFormat: Text.PlainText
+                            text: root.tr(root.colorLabelKey(swatchBtn.modelData))
+                            color: swatchBtn.isSelected ? skin.background : skin.ink
+                            font.family: skin.fontFamily
+                            font.pixelSize: skin.small
+                            font.bold: true
+                          }
+                        }
+
+                        MouseArea {
+                          id: swatchArea
+                          anchors.fill: parent
+                          hoverEnabled: true
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: root.saveSetting("tachColor", swatchBtn.modelData)
+                        }
+                      }
+                    }
+                  }
+                }
+
+                // Number length
+                Column {
+                  visible: root.tachMode === "both" || root.tachMode === "rpm"
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.tr("optFormat")
+                    color: skin.dim
+                    font.family: skin.fontFamily
+                    font.pixelSize: skin.small
+                  }
+
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Repeater {
+                      model: Model.RPM_FORMATS
+                      delegate: Kit.ActionButton {
+                        required property string modelData
+                        look: skin
+                        compact: true
+                        text: root.tr(root.formatLabelKey(modelData))
+                        selected: root.rpmFormatSetting === modelData
+                        onClicked: root.saveSetting("rpmFormat", modelData)
+                      }
+                    }
+                  }
+                }
+
+                // Toggles: RPM word + bar divider
+                Column {
+                  visible: root.tachMode !== "off"
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.tr("optDetails")
+                    color: skin.dim
+                    font.family: skin.fontFamily
+                    font.pixelSize: skin.small
+                  }
+
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Kit.ActionButton {
+                      visible: root.tachMode === "both" || root.tachMode === "rpm"
+                      look: skin
+                      compact: true
+                      text: root.tr("optRpmWord")
+                      selected: root.showRpmUnit
+                      onClicked: root.saveSetting("rpmUnit", !root.showRpmUnit)
+                    }
+
+                    Kit.ActionButton {
+                      look: skin
+                      compact: true
+                      text: root.tr("optDivider")
+                      selected: root.showDivider
+                      onClicked: root.saveSetting("barDivider", !root.showDivider)
+                    }
+                  }
+                }
+
+                // Dial scale (max RPM)
+                Column {
+                  visible: root.tachMode === "both" || root.tachMode === "gauge"
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.tr("optScale")
+                    color: skin.dim
+                    font.family: skin.fontFamily
+                    font.pixelSize: skin.small
+                  }
+
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Repeater {
+                      model: Model.TACH_SCALES
+                      delegate: Kit.ActionButton {
+                        required property int modelData
+                        look: skin
+                        compact: true
+                        text: modelData === 0 ? root.tr("scaleAuto") : String(modelData)
+                        selected: root.tachMaxSetting === modelData
+                        onClicked: root.saveSetting("tachMax", modelData)
+                      }
+                    }
+                  }
+                }
               }
             }
 

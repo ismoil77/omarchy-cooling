@@ -85,6 +85,12 @@ Without Max nothing else is left behind.
 | Setting | Default | |
 |---|---|---|
 | `mode` | auto | `auto`: the widget switches the power profile itself, quiet at rest and medium at work; `manual`: the mode you click stays. Clicking a mode sets this. |
+| `tachometer` | both | what to show beside the temperature in the bar: `both` (dial + RPM), `gauge`, `rpm`, or `off` |
+| `tachColor` | auto | tachometer dial color: `auto`, `thermal` (load-based), `accent`, a theme color (`green`, `cyan`, `blue`, `yellow`, `orange`, `red`, `magenta`), or a `#rrggbb` hex |
+| `rpmFormat` | full | RPM number length in the bar: `full` (`5200`), `compact` (`5.2k`), or `padded` (`0850`) |
+| `rpmUnit` | true | show or hide the `rpm` unit next to the number in the bar |
+| `barDivider` | false | draw a subtle vertical divider between the temperature and the tachometer |
+| `tachMax` | 0 | full-scale RPM for the dial needle (`0` = auto from `fanN_max` or `5000`) |
 | `interval` | 3 | seconds between reads |
 | `language` | auto | `en`, `ru`, or the system locale |
 | `textSize` | Normal | Normal, Large, Extra large |
