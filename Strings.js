@@ -39,6 +39,7 @@ var en = {
   installing: "Type your password in the window that opened, once: Max turns on by itself after that.",
   noModes: "This computer offers no power modes",
   tipBar: "Cooling: processor {t}",
+  tipBarFan: "Cooling: processor {t} · {fan}",
   sensors: "Sensors"
 }
 
@@ -79,6 +80,7 @@ var ru = {
   installing: "Введи пароль в открывшемся окне, один раз: дальше максимум включится сам.",
   noModes: "Этот компьютер не даёт выбирать режим",
   tipBar: "Охлаждение: процессор {t}",
+  tipBarFan: "Охлаждение: процессор {t} · {fan}",
   sensors: "Датчики"
 }
 

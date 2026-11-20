@@ -29,6 +29,8 @@ Panel {
   readonly property var cfg: Model.config({ language: setting("language", "auto"), locale: Qt.locale().name })
   readonly property int pollSeconds: Math.max(1, Number(setting("interval", 3)) || 3)
   readonly property bool vertical: bar ? bar.vertical : false
+  readonly property int barSize: bar ? bar.barSize : Style.bar.sizeHorizontal
+  readonly property bool showTachometer: setting("tachometer", true) !== false
   readonly property string icon: "󰈐"
 
   function tr(key, params) { return Model.tr(cfg, key, params) }
@@ -91,9 +93,14 @@ Panel {
   readonly property var tempGroups: Model.groups(found ? found.temps : [], tempValues)
   readonly property var cpu: tempGroups.filter(function(g) { return g.group === "cpu" })[0] || tempGroups[0] || null
   readonly property var fans: Model.fanRows(cfg, found ? found.fans : [], fanValues, peaks)
+  readonly property var barFan: Model.primaryFan(found ? found.fans : [], fanValues, peaks)
+  readonly property bool hasBarFan: showTachometer && barFan !== null
+  readonly property string barTempText: cpu ? Model.deg(cpu.main) : ""
+  readonly property string barRpmText: hasBarFan ? tr("rpm", { n: barFan.rpm }) : ""
   readonly property string heat: Model.level(cpu)
   readonly property string kitLevel: Model.kitLevel(heat)
   readonly property var nvidia: found ? found.gpus.filter(function(g) { return g.vendor === "nvidia" })[0] || null : null
+  onShowTachometerChanged: if (showTachometer) Qt.callLater(poll)
 
   Kit.ThemePalette { id: themePalette }
   Kit.Look {
@@ -104,6 +111,7 @@ Panel {
     themeColors: themePalette.colors
   }
   readonly property color levelBase: heat === "hot" ? skin.themed("red", Color.urgent) : heat === "warm" ? skin.themed("yellow", "#d0a215") : Color.accent
+  readonly property color hotRedColor: skin.themed("red", Color.urgent)
 
   TextMetrics { id: valueMetrics; font.family: skin.fontFamily; font.pixelSize: skin.small; text: "0000 " + root.tr("rpm", { n: "" }) }
 
@@ -164,17 +172,17 @@ Panel {
     polledOnce = true
     var temps = found.temps
     tempValues = readSome(tempFiles, tempValues, function(i) { return busy || temps[i].group === "cpu" })
-    if (busy) {
+    if (busy || showTachometer) {
       fanValues = readSome(fanFiles, fanValues, function() { return true })
       var p = Object.assign({}, peaks)
       var changed = false
       for (var i = 0; i < found.fans.length; i++) {
         var v = fanValues[i]
-        if (v !== null && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
+        if (Model.validRpm(v) && v > (p[found.fans[i].path] || 0)) { p[found.fans[i].path] = v; changed = true }
       }
       if (changed) peaks = p
-      if (pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
     }
+    if (busy && pwmFile.path !== "") { pwmFile.reload(); pwmText = pwmFile.text() }
     // The mode in force and the load matter while Auto decides, or while seen.
     if (busy || modeSetting === "auto") {
       if (platformFile.path !== "") { platformFile.reload(); platformText = platformFile.text() }
@@ -351,7 +359,9 @@ Panel {
     // What the widget sees, for checking it without opening the popup.
     function state(): string {
       return JSON.stringify({ modes: root.modes, selected: root.selected, active: root.active, maxOn: root.maxOn,
-                              mode: root.modeSetting, cpu: root.cpu ? Math.round(root.cpu.main) : null, load: root.load, cpus: root.cpus })
+                              mode: root.modeSetting, cpu: root.cpu ? Math.round(root.cpu.main) : null, load: root.load, cpus: root.cpus,
+                              fans: root.fans.map(function(f) { return { label: f.label, rpm: f.rpm, max: f.max } }),
+                              barFan: root.barFan })
     }
   }
 
@@ -359,26 +369,177 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  TextMetrics {
-    id: barLabelMetrics
+  FontMetrics {
+    id: barFontMetrics
     font.family: button.fontFamily
     font.pixelSize: button.fontSize
-    text: button.labelText
   }
 
-  BarIconButton {
+  TextMetrics {
+    id: barTempMetrics
+    font.family: button.fontFamily
+    font.pixelSize: button.fontSize
+    font.features: { "tnum": 1 }
+    text: root.barTempText
+  }
+
+  TextMetrics {
+    id: barRpmMetrics
+    font.family: button.fontFamily
+    font.pixelSize: button.fontSize
+    font.features: { "tnum": 1 }
+    text: root.barRpmText
+  }
+
+  readonly property real barTextOffsetY: (barFontMetrics.descent - barFontMetrics.ascent + barFontMetrics.tightBoundingRect("0").height) / 2
+  readonly property real tachSize: Math.min(Math.max(Style.bar.iconCanvas, Math.round(Style.bar.iconCanvas * 1.125)), Math.max(Style.bar.iconCanvas, root.barSize - Style.space(6)))
+  property color tempColor: root.heat !== "calm" ? root.levelBase : button.foreground
+  Behavior on tempColor {
+    enabled: !root.bar || root.bar.foregroundAnimationEnabled
+    ColorAnimation { duration: Style.duration(160) }
+  }
+
+  WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.icon
-    labelText: root.vertical || !root.cpu ? "" : Model.deg(root.cpu.main)
+    labelVisible: false
+    hasVisualContent: true
+    fontSize: Style.bar.iconFont
     active: root.heat !== "calm"
     activeColor: root.levelBase
-    slotSize: labelText === "" ? Style.bar.iconSlot : Math.ceil(button.canvasSize + barLabelMetrics.width + Style.space(4)) + Style.space(14)
-    tooltipText: root.opened ? "" : Model.tooltip(root.cfg, root.cpu)
+    fixedWidth: root.vertical ? -1 : Math.ceil(barContent.width) + Style.space(14)
+    fixedHeight: root.vertical ? (root.hasBarFan ? Math.ceil(Style.bar.iconCanvas + root.tachSize + Style.space(4)) + Style.space(12) : Style.bar.iconSlot) : -1
+    tooltipText: root.opened ? "" : Model.tooltip(root.cfg, root.cpu, root.hasBarFan ? root.barFan : null)
     onPressed: function(b) {
       if (b === Qt.RightButton) { root.readProfiles(); root.nextProfile() }
       else root.toggle()
+    }
+
+    Item {
+      id: barContent
+      x: (button.width - width) / 2
+      y: (button.height - height) / 2
+      scale: button.pressScale
+      width: root.vertical
+        ? Math.max(Style.bar.iconCanvas, root.tachSize)
+        : (Style.bar.iconCanvas
+           + (root.barTempText !== "" ? Style.space(4) + barTempMetrics.width : 0)
+           + (root.hasBarFan ? Style.space(8) + root.tachSize + Style.space(4) + barRpmMetrics.width : 0))
+      height: root.vertical
+        ? (Style.bar.iconCanvas + (root.hasBarFan ? Style.space(4) + root.tachSize : 0))
+        : Math.max(Style.bar.iconCanvas, root.tachSize)
+
+      // Horizontal bar: [fan icon] [temp°]   [tachometer dial] [rpm]
+      Row {
+        visible: !root.vertical
+        anchors.centerIn: parent
+        height: barContent.height
+        spacing: Style.space(8)
+
+        Row {
+          height: barContent.height
+          spacing: Style.space(4)
+
+          OpticalGlyph {
+            width: Style.bar.iconCanvas
+            height: barContent.height
+            text: root.icon
+            fontFamily: button.fontFamily
+            fontSize: button.fontSize
+            paintedSize: Style.bar.iconSize
+            color: root.tempColor
+          }
+
+          Item {
+            visible: root.barTempText !== ""
+            width: barTempMetrics.width
+            height: barContent.height
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.verticalCenterOffset: root.barTextOffsetY
+              textFormat: Text.PlainText
+              text: root.barTempText
+              font.family: button.fontFamily
+              font.pixelSize: button.fontSize
+              font.features: { "tnum": 1 }
+              color: root.tempColor
+              renderType: Text.NativeRendering
+            }
+          }
+        }
+
+        Row {
+          visible: root.hasBarFan
+          height: barContent.height
+          spacing: Style.space(4)
+
+          Tachometer {
+            width: root.tachSize
+            height: root.tachSize
+            anchors.verticalCenter: parent.verticalCenter
+            fraction: root.barFan ? root.barFan.fraction : 0
+            color: button.foreground
+            trackColor: Util.alpha(button.foreground, 0.24)
+            accentColor: button.foreground
+            dangerColor: root.hotRedColor
+            animations: skin.motion
+          }
+
+          Item {
+            width: barRpmMetrics.width
+            height: barContent.height
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.verticalCenterOffset: root.barTextOffsetY
+              textFormat: Text.PlainText
+              text: root.barRpmText
+              font.family: button.fontFamily
+              font.pixelSize: button.fontSize
+              font.features: { "tnum": 1 }
+              color: button.foreground
+              renderType: Text.NativeRendering
+              Behavior on color {
+                enabled: !root.bar || root.bar.foregroundAnimationEnabled
+                ColorAnimation { duration: Style.duration(160) }
+              }
+            }
+          }
+        }
+      }
+
+      // Vertical bar: [fan icon] over [tachometer dial]
+      Column {
+        visible: root.vertical
+        anchors.centerIn: parent
+        spacing: Style.space(4)
+
+        OpticalGlyph {
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: Style.bar.iconCanvas
+          height: Style.bar.iconCanvas
+          text: root.icon
+          fontFamily: button.fontFamily
+          fontSize: button.fontSize
+          paintedSize: Style.bar.iconSize
+          color: root.tempColor
+        }
+
+        Tachometer {
+          visible: root.hasBarFan
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.tachSize
+          height: root.tachSize
+          fraction: root.barFan ? root.barFan.fraction : 0
+          color: button.foreground
+          trackColor: Util.alpha(button.foreground, 0.24)
+          accentColor: button.foreground
+          dangerColor: root.hotRedColor
+          animations: skin.motion
+        }
+      }
     }
   }
 

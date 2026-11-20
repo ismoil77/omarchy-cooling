@@ -23,7 +23,8 @@
       "language": "auto",
       "textSize": "Normal",
       "animations": true,
-      "mode": "auto"
+      "mode": "auto",
+      "tachometer": true
     },
     "schema": [
       {
@@ -60,6 +61,13 @@
         ],
         "defaultValue": "Normal",
         "description": "Scales the popup text. Text is never smaller than 13 px."
+      },
+      {
+        "key": "tachometer",
+        "type": "boolean",
+        "label": "Bar tachometer",
+        "defaultValue": true,
+        "description": "Show the main fan's RPM and a tachometer gauge beside the temperature in the bar."
       },
       {
         "key": "animations",

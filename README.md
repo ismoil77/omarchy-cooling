@@ -85,6 +85,7 @@ Without Max nothing else is left behind.
 | Setting | Default | |
 |---|---|---|
 | `mode` | auto | `auto`: the widget switches the power profile itself, quiet at rest and medium at work; `manual`: the mode you click stays. Clicking a mode sets this. |
+| `tachometer` | true | show the primary fan's RPM and a compact tachometer dial beside the temperature in the bar |
 | `interval` | 3 | seconds between reads |
 | `language` | auto | `en`, `ru`, or the system locale |
 | `textSize` | Normal | Normal, Large, Extra large |
