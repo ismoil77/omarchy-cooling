@@ -5,7 +5,7 @@ Run once at start (and when the popup opens); the widget then re-reads the
 files it lists in place, with no process per tick. Prints one JSON object, no
 human words:
 
-  fans      [{path, driver, index}]                 fanN_input files, RPM
+  fans      [{path, driver, index, label, max}]   fanN_input files, RPM
   temps     [{path, driver, group, label, crit}]    tempN_input files, millidegrees
             group: cpu / gpu / ssd / board / other; crit in degrees or null
   gpus      [{vendor, runtime}]                     discrete GPUs: runtime is the
@@ -39,6 +39,8 @@ VENDORS = {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}
 HELPER = "/usr/local/libexec/ismoil-fans-max"
 # Their fans have their own control; Max leaves them alone (so does the helper).
 GPU_DRIVERS = {"amdgpu", "nouveau", "radeon", "i915", "xe"}
+# Readings outside 0..29999 RPM (e.g. 65280 / 0xFF00, 65535 / 0xFFFF) are firmware placeholders.
+MAX_PLAUSIBLE_RPM = 30000
 
 
 def read(path):
@@ -78,8 +80,19 @@ def discover(root="/sys"):
             stem = f[:-len("_input")]
             path = os.path.join(d, f)
             if stem.startswith("fan") and stem[3:].isdigit():
-                if number(path) is not None:
-                    fans.append({"path": path, "driver": driver, "index": int(stem[3:])})
+                if number(os.path.join(d, stem + "_fault")) == 1:
+                    continue
+                value = number(path)
+                if value is None or value < 0 or value >= MAX_PLAUSIBLE_RPM:
+                    continue
+                max_rpm = number(os.path.join(d, stem + "_max"))
+                fans.append({
+                    "path": path,
+                    "driver": driver,
+                    "index": int(stem[3:]),
+                    "label": read(os.path.join(d, stem + "_label")) or None,
+                    "max": max_rpm if max_rpm and 0 < max_rpm < MAX_PLAUSIBLE_RPM else None,
+                })
             elif stem.startswith("temp") and stem[4:].isdigit():
                 value = number(path)
                 if value is None or value <= 0:
@@ -94,6 +107,9 @@ def discover(root="/sys"):
     # acpi_fan repeats a fan a real driver already reports: only alone does it count.
     if any(f["driver"] != "acpi_fan" for f in fans):
         fans = [f for f in fans if f["driver"] != "acpi_fan"]
+    # dell_ddv exposes a virtual WMI mirror alongside dell_smm (often reporting 65280 / 0xFF00).
+    if any(f["driver"] == "dell_smm" for f in fans):
+        fans = [f for f in fans if f["driver"] != "dell_ddv"]
 
     gpus = []
     pci = os.path.join(root, "bus", "pci", "devices")
